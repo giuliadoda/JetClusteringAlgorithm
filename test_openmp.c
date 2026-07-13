@@ -2,17 +2,18 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <math.h>
-#include <hdf5.h>        // TO BE INSTALLED
+#include <hdf5.h>           // TO BE INSTALLED
+#include <omp.h>            // TO BE INSTALLED
 
 #define MAX_P 700
 #define N_FEAT 3
 #define N_COLS (MAX_P * N_FEAT)
 #define DIM 2
 
-#define N_EVENTS 10
+#define N_EVENTS 10         // actually 8192
 
 #define R 0.4
-#define D 1000. // maybe change it after inspecting distance actual values
+#define D 1000.             // maybe change it after inspecting distance actual values
 
 #define FILE_PATH "datafile.h5"
 #define DATA_PATH "df"     
@@ -23,7 +24,7 @@ typedef struct
 {
     int id;
 
-    int *components; // to keep track of the particles belonging here (particle IDs)
+    int *components; // to keep track of the particles belonging here (particle IDs), to be dynamically allocated
 
     int n_components; // how many particles in the cluster
 
@@ -51,23 +52,44 @@ typedef struct
 
 } Event;
 
+// struct to handle minimum distance
+typedef struct
+{
+    double distance;
+
+    // particle IDs
+    int id_i, id_j;
+
+    // particle indexes
+    int idx_i, idx_j;
+
+} Minimum;
+
 
 // function to read each event (to start with)
 void read_event(double *raw_data, Event *ev, int id) {
 
-    ev->n_particles = 0;
+    int n_part = 0;
+
+    // first find number of particle sequentially
+    while (n_part < MAX_P && raw_data[N_FEAT*n_part] != 0.0f)
+    {
+        n_part++;
+    }
+
     ev->n_clusters = 0;
     ev->id = id;
-
-    for (int p = 0; p < MAX_P; ++p) {
+    ev->n_particles = n_part;
+    
+    // maybe this is not worth parallelizing since operations are not heavy (per thread)
+    #pragma omp parallel for
+    // index p is private to each thread by default
+    // local copy of n_part, then reduced to a single value and combined with the original global value
+    for (int p = 0; p < n_part; ++p) {
 
         int idx = N_FEAT*p;
 
         double p_t = raw_data[idx];
-
-        if (p_t == 0.0) break;
-
-        ev->n_particles++;
 
         ev->particles[p].id = p;
         ev->free_particles[p] = p;
@@ -96,6 +118,9 @@ double compute_distance_ij(Event *ev, int i, int j) {
     Particle *particle_i = &ev->particles[i]; 
     Particle *particle_j = &ev->particles[j];
 
+    double p_i = particle_i->p_t;
+    double p_j = particle_j->p_t;
+
     double eta_i = particle_i->eta;
     double phi_i = particle_i->phi;
 
@@ -108,14 +133,13 @@ double compute_distance_ij(Event *ev, int i, int j) {
     // recall that phi is periodic
     if (diff_phi > M_PI)
     {
-        diff_phi -= 2.*M_PI;
+        diff_phi = fabs(diff_phi-2.*M_PI);
     }
 
     if (diff_phi < -M_PI)
     {
-        diff_phi += 2.*M_PI;
+        diff_phi = fabs(diff_phi+2.*M_PI);
     }
-    
 
     double deltaR2 = diff_eta*diff_eta + diff_phi*diff_phi;
 
@@ -123,8 +147,8 @@ double compute_distance_ij(Event *ev, int i, int j) {
 
     double p2;
 
-    double p_i2 = particle_i->d_B;
-    double p_j2 = particle_j->d_B;
+    double p_i2 = 1./(p_i*p_i);
+    double p_j2 = 1./(p_j*p_j);
 
     if ( p_i2 > p_j2)
     {
@@ -166,15 +190,15 @@ void particle_update(Event *ev, int i, int j) {
     double eta_new = (p_t_i*eta_i + p_t_j*eta_j)/p_t_new;
     double phi_new = (p_t_i*phi_i + p_t_j*phi_j)/p_t_new;
 
-    // recall that phi is periodic
+    // recal that phi is periodic
     if (phi_new > M_PI)
     {
-        phi_new -= 2.*M_PI;
+        phi_new = fabs(phi_new-2.*M_PI);
     }
 
     if (phi_new < -M_PI)
     {
-        phi_new += 2.*M_PI;
+        phi_new = fabs(phi_new+2.*M_PI);
     }
 
     part_i->p_t = p_t_new;
@@ -198,10 +222,6 @@ void particle_update(Event *ev, int i, int j) {
 // ----------- MAIN -------------
 
 int main() {
-
-    // size checks
-    printf("sizeof(Particle) = %zu bytes\n", sizeof(Particle));
-    printf("sizeof(Event)    = %zu bytes\n", sizeof(Event));
 
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
@@ -265,11 +285,17 @@ int main() {
         H5P_DEFAULT     // file access property list identifier
     );
 
-    // declare Event
-    static Event event;
+    // array to store elapsed time for each event
+    double times[N_EVENTS];
 
     // loop over events
+    #pragma omp parallel for // each event per thread
     for (int ev = 0; ev < n_read; ++ev) {
+
+        Event event; 
+
+        // compute wall time
+        double t_event = omp_get_wtime();
 
         read_event(&data[ev*N_COLS], &event, ev); // contains a for cycle
 
@@ -280,10 +306,10 @@ int main() {
 
         int particle_counter = n_part;
 
-        // loop over free particles
+        // loop over event particles
         while (particle_counter > 0)
-        {    
-            // only one particle left --> jet
+        {
+            // Only one particle left --> jet
             if (particle_counter == 1)
             {
                 int idx_1 = event.free_particles[0];
@@ -293,15 +319,28 @@ int main() {
             }
 
             // compute distances for every i different from j and beam, and find minimum distances
-            double min_d_ij = D; 
-            int id_i, id_j;     // particles IDs
-            int idx_i, idx_j;   // free particles indexes
 
-            double min_d_iB = D;
-            int id_iB;
-            int idx_iB;
+            // to handle minimum distance from beam
+            Minimum beam_min;
 
-            // loop over free particles
+            beam_min.distance = D;
+            beam_min.id_i = -1;
+            beam_min.id_j = -1;
+            beam_min.idx_i = -1;
+            beam_min.idx_j = -1;
+
+            #pragma omp parallel
+            {
+            // to handle minimun distance between particles
+            Minimum local_min;
+
+            local_min.distance = D;
+            local_min.id_i = -1;
+            local_min.id_j = -1;
+            local_min.idx_i = -1;
+            local_min.idx_j = -1;
+
+            #pragma omp for 
             for (int i = 0; i < particle_counter; ++i)
             {
                 // get particle-i ID (that is the idx for particles array)
@@ -315,15 +354,14 @@ int main() {
                     double current_d_ij = compute_distance_ij(&event, free_particle_i, free_particle_j);
 
                     // update finding minimum distance ij
-                    if (current_d_ij < min_d_ij)
+                    if (current_d_ij < local_min.distance)
                     {
-                        min_d_ij = current_d_ij;
+                        local_min.distance = current_d_ij;
 
-                        id_i = free_particle_i;
-                        id_j = free_particle_j;
-
-                        idx_i = i;
-                        idx_j = j;
+                        local_min.idx_i = i;
+                        local_min.idx_j = j;
+                        local_min.id_i = free_particle_i;
+                        local_min.id_j = free_particle_j;
                     }
             
                 }
@@ -332,27 +370,30 @@ int main() {
                 double current_d_iB = event.particles[free_particle_i].d_B;
 
                 // update finding minimum distance iB
-                if (current_d_iB < min_d_iB)
+                #pragma omp critical
+                if (current_d_iB < beam_min.distance)
                 {
-                    min_d_iB = current_d_iB;
+                    beam_min.distance = current_d_iB;
 
-                    id_iB = free_particle_i;
-                    idx_iB = i;
+                    beam_min.id_i = free_particle_i;
+                    beam_min.idx_i = i;
                 }
                 
             }
             
             // merge: if d_iB_min < d_ij_min, jet; else new "particle"
-            if (min_d_iB < min_d_ij)
+            if (beam_min.distance < local_min.distance)
             {
-                event.free_particles[idx_iB] = event.free_particles[particle_counter-1];
+                event.free_particles[beam_min.idx_i] = event.free_particles[particle_counter-1];
                 event.n_clusters++;
-                event.particles[id_iB].isCluster = true;
+                event.particles[beam_min.id_i].isCluster = true;
             }
             else 
             {
-                particle_update(&event, id_i, id_j);
-                event.free_particles[idx_j] = event.free_particles[particle_counter-1];
+                particle_update(&event, local_min.id_i, local_min.id_j);
+                event.free_particles[local_min.idx_j] = event.free_particles[particle_counter-1];
+            }
+
             }
 
             particle_counter--;
@@ -371,14 +412,14 @@ int main() {
             H5P_DEFAULT
         );
 
-        for (int i = 0; i < n_part; ++i)
+        for (int p = 0; p < n_part; ++p)
         {
-            Particle *cluster = &event.particles[i];
+            Particle *cluster = &event.particles[p];
 
             if (!cluster->isCluster) continue;
 
             char cluster_name[64];
-            sprintf(cluster_name, "cluster_%d", i);
+            sprintf(cluster_name, "cluster_%d", p);
 
             hid_t cluster_group = H5Gcreate2(
                 event_group,
@@ -420,15 +461,23 @@ int main() {
             H5Sclose(space);
 
             H5Gclose(cluster_group);
-
-            free(cluster->components);
-            cluster->components = NULL;
             
         }
 
         H5Gclose(event_group); 
 
+        t_event = omp_get_wtime() - t_event;
+
+        times[ev] = t_event;
+
     }
+
+    // just read elapsed processing time for each event
+    for (int id = 0; id < N_EVENTS; ++id)
+    {
+        printf("Event ID %d elapsed time (s) %f", id, times[id]);
+    }
+    
 
     // free memory and close file
     free(data);
