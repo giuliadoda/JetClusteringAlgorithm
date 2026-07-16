@@ -371,7 +371,7 @@ static herr_t save_event(hid_t fout, Event *event) {
         
     }
 
-    printf("Number of clusters: %d\n", cluster_counter); // save it (?)
+    printf("Number of clusters: %d\n", cluster_counter); // save it and save also number of particles in the event 
     
     event_status |= H5Gclose(event_group);
 

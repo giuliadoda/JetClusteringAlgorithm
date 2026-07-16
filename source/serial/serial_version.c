@@ -166,6 +166,8 @@ int main() {
 
     exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; // also save it
 
+    // save event execution times
+
     printf("\nExecution time (total, %d events): %f (sec)\n\n", N_EVENTS, exec_time);
 
     return 0;
