@@ -3,11 +3,11 @@
 #include <stdbool.h>
 #include <math.h>
 #include <time.h>
-#include <hdf5.h>           // TO BE INSTALLED
+#include <hdf5.h>           
 
-#include "include/constants.h" 
-#include "include/serial/utils.h"  
-#include "include/serial/functions.h"
+#include "constants.h" 
+#include "utils.h"  
+#include "functions.h"
 
 
 // ----------- MAIN -------------
@@ -19,6 +19,8 @@ int main() {
     double exec_time;
 
     start_t = clock();
+
+    printf("Getting data ... \n");
 
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
@@ -49,8 +51,15 @@ int main() {
         fprintf(stderr, "Cannot get dataspace\n");
         return EXIT_FAILURE;
     }
-    
 
+    // check dataset dimensions
+
+    hsize_t dataset_dims[2];
+
+    H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
+
+    printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
+    
     // read only part of the dataset (to start with and maybe it won't fit in memory)
     int start_row = 0;
     int start_col = 0;
@@ -80,7 +89,8 @@ int main() {
         fprintf(stderr, "Cannot create dataspace\n");
         return EXIT_FAILURE;
     }
-    
+
+    printf("Allocating memory for data ...\n");
 
     // allocate memory
     double *data = malloc(n_read * N_COLS * sizeof(double));
@@ -106,10 +116,12 @@ int main() {
         fprintf(stderr, "Cannot read data\n");
         return EXIT_FAILURE;
     }
+
+    printf("Creating output file ... \n");
     
     // output file
     hid_t fout = H5Fcreate(
-        "clusters.h5",
+        "data/results/serial/clusters.h5",
         H5F_ACC_TRUNC,  // file access flag: if the file already exists, erase all data previously stored
         H5P_DEFAULT,    // file creation property list identifier
         H5P_DEFAULT     // file access property list identifier
@@ -120,7 +132,6 @@ int main() {
         fprintf(stderr, "Cannot create output file\n");
         return EXIT_FAILURE;
     }
-    
 
     // array to store elapsed time for each event
     double times[N_EVENTS];
@@ -128,14 +139,18 @@ int main() {
     // declare Event
     static Event event;
 
+    printf("Starting loop over events ...\n");
+
     // loop over events 
-    process_event(&data, &event, &times, fout);
+    process_event(data, &event, times, fout);
+
+    printf("Loop over events finished.\n");
 
     // just read elapsed processing time for each event for debug
-    for (int id = 0; id < N_EVENTS; ++id)
-    {
-        printf("Event ID %d elapsed time (s) %f", id, times[id]);
-    }
+    // for (int id = 0; id < N_EVENTS; ++id)
+    // {
+    //     printf("Event ID %d elapsed time (s) %f\n", id, times[id]);
+    // }
 
     // free memory and close file
     free(data);
@@ -151,7 +166,7 @@ int main() {
 
     exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; // also save it
 
-    printf("Execution time (total) %d", exec_time);
+    printf("\nExecution time (total, %d events): %f (sec)\n\n", N_EVENTS, exec_time);
 
     return 0;
 }

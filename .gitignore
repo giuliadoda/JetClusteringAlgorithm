@@ -1,2 +1,5 @@
 .vscode
 data/
+bin/
+build/
+plots/figures
