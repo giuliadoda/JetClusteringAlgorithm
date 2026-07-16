@@ -91,7 +91,7 @@ int main() {
         exit(1);
     }
 
-    // read data -> maybe read in chunks
+    // read data -> maybe read in chunks (?)
     hid_t read_id = H5Dread(
         dset_id,                // dataset identifier
         H5T_NATIVE_DOUBLE,      // memory datatype identifier
@@ -107,7 +107,6 @@ int main() {
         return EXIT_FAILURE;
     }
     
-
     // output file
     hid_t fout = H5Fcreate(
         "clusters.h5",
@@ -129,10 +128,10 @@ int main() {
     // declare Event
     static Event event;
 
-    // loop over events --> ADD OUTPUT FILE MANAGEMENT!
+    // loop over events 
     process_event(&data, &event, &times, fout);
 
-    // just read elapsed processing time for each event
+    // just read elapsed processing time for each event for debug
     for (int id = 0; id < N_EVENTS; ++id)
     {
         printf("Event ID %d elapsed time (s) %f", id, times[id]);
@@ -150,7 +149,9 @@ int main() {
 
     end_t = clock();
 
-    exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; // save it
+    exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; // also save it
+
+    printf("Execution time (total) %d", exec_time);
 
     return 0;
 }
