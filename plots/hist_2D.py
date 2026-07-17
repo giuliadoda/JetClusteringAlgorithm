@@ -6,7 +6,7 @@ import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D  
 
 # event ID to visualize
-EVENT_ID = 111
+EVENT_ID = 3
 
 # code version
 VERSION = "serial"
@@ -26,8 +26,8 @@ N_FEAT = 3
 MAX_P = 700
 
 # histogram settings
-BAR_WIDTH_ETA = 0.08
-BAR_WIDTH_PHI = 0.08
+BAR_WIDTH_ETA = 0.1
+BAR_WIDTH_PHI = 0.1
 
 # heatmap settings
 HEATMAP_BINS_ETA = 100
@@ -36,7 +36,7 @@ ETA_RANGE = (-8.0, 8.0)    # should be automatic
 PHI_RANGE = (-np.pi, np.pi)  
 
 # plot directory
-SAVE_DIR = f"figures/{VERSION}" # make sure it exists
+SAVE_DIR = f"/mnt/POD/MCP_GD/JetClusteringAlgorithm/plots/figures/{VERSION}" # make sure it exists
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # read event from raw data

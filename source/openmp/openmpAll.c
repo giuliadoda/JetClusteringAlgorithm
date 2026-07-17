@@ -2,42 +2,64 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <math.h>
-#include <hdf5.h>           // TO BE INSTALLED
-#include <omp.h>            // TO BE INSTALLED
+#include <hdf5.h>           
+#include <omp.h>    
 
-#define MAX_P 700
-#define N_FEAT 3
-#define N_COLS (MAX_P * N_FEAT)
-#define DIM 2
-
-#define N_EVENTS 10         // actually 8192
-
-#define R 0.4
-#define D 1000.             // maybe change it after inspecting distance actual values
-
-#define FILE_PATH "datafile.h5"
-#define DATA_PATH "df"     
-
-
-
+#include "constants.h" 
+#include "utils.h"  
+#include "functions.h"  
 
 
 // ----------- MAIN -------------
 
 int main() {
 
+    // execution time
+    clock_t start_t, end_t;
+    double exec_time;
+
+    start_t = clock();
+
+    printf("Getting data ... \n");
+
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
     // H5P_DEFAULT -> use the default behavior of the library
     hid_t file_id = H5Fopen(FILE_PATH, H5F_ACC_RDONLY, H5P_DEFAULT);
 
+    // safety check
+    if (file_id < 0) {
+        fprintf(stderr, "Cannot open file\n");
+        return EXIT_FAILURE;
+    }
+
     // get dataset identifier
     hid_t dset_id = H5Dopen2(file_id, DATA_PATH, H5P_DEFAULT);
+
+    if (dset_id < 0)
+    {
+        fprintf(stderr, "Cannot get dataset\n");
+        return EXIT_FAILURE;
+    }
 
     // get identifier for a copy of the dataspace for a dataset 
     hid_t space_id = H5Dget_space(dset_id); 
 
-    // read only part of the dataset (to start with and maybe it won't fit in memory)
+    if (space_id < 0)
+    {
+        fprintf(stderr, "Cannot get dataspace\n");
+        return EXIT_FAILURE;
+    }
+
+    // check dataset dimensions
+
+    hsize_t dataset_dims[2];
+
+    H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
+
+    printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
+
+    // read dataset (only the selected number of events)
     int start_row = 0;
     int start_col = 0;
     hsize_t n_read = N_EVENTS;
@@ -61,6 +83,14 @@ int main() {
         NULL            // maximum size of each dimension
     );
 
+    if (memspace < 0)
+    {
+        fprintf(stderr, "Cannot create dataspace\n");
+        return EXIT_FAILURE;
+    }
+
+    printf("Allocating memory for data ...\n");
+
     // allocate memory
     double *data = malloc(n_read * N_COLS * sizeof(double));
 
@@ -70,8 +100,8 @@ int main() {
         exit(1);
     }
 
-    // read data -> maybe read in chunks
-    H5Dread(
+    // read data
+    hid_t read_id = H5Dread(
         dset_id,                // dataset identifier
         H5T_NATIVE_DOUBLE,      // memory datatype identifier
         memspace,               // memory dataspace identifier
@@ -79,6 +109,14 @@ int main() {
         H5P_DEFAULT,            // identifier of a transfer property list
         data                    // buffer to receive data read from file
     );
+
+    if (read_id < 0)
+    {
+        fprintf(stderr, "Cannot read data\n");
+        return EXIT_FAILURE;
+    }
+
+    printf("Creating output file ... \n");
 
     // output file
     hid_t fout = H5Fcreate(
@@ -88,8 +126,16 @@ int main() {
         H5P_DEFAULT     // file access property list identifier
     );
 
+    if (fout < 0)
+    {
+        fprintf(stderr, "Cannot create output file\n");
+        return EXIT_FAILURE;
+    }
+
     // array to store elapsed time for each event
     double times[N_EVENTS];
+
+    printf("Starting loop over events ...\n");
 
     // loop over events
     #pragma omp parallel for // each event per thread

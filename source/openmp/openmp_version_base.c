@@ -2,12 +2,15 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <math.h>
-#include <time.h>
-#include <hdf5.h>           
+#include <hdf5.h>        
+#include <omp.h>    
 
 #include "constants.h" 
 #include "utils.h"  
-#include "functions.h"
+#include "functions.h"  
+
+
+#define NUM_THREADS 2
 
 
 // ----------- MAIN -------------
@@ -15,10 +18,9 @@
 int main() {
 
     // execution time
-    clock_t start_t, end_t;
-    double exec_time;
+    double start_t, end_t, exec_time;
 
-    start_t = clock();
+    start_t = omp_get_wtime();
 
     printf("Getting data ... \n");
 
@@ -31,7 +33,7 @@ int main() {
     if (file_id < 0) {
         fprintf(stderr, "Cannot open file\n");
         return EXIT_FAILURE;
-    }   
+    }
 
     // get dataset identifier
     hid_t dset_id = H5Dopen2(file_id, DATA_PATH, H5P_DEFAULT);
@@ -41,7 +43,7 @@ int main() {
         fprintf(stderr, "Cannot get dataset\n");
         return EXIT_FAILURE;
     }
-    
+
     // get identifier for a copy of the dataspace for a dataset 
     hid_t space_id = H5Dget_space(dset_id); 
 
@@ -58,7 +60,7 @@ int main() {
     H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
 
     printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
-    
+
     // read dataset (only the selected number of events)
     int start_row = 0;
     int start_col = 0;
@@ -100,7 +102,7 @@ int main() {
         exit(1);
     }
 
-    // read data 
+    // read data
     hid_t read_id = H5Dread(
         dset_id,                // dataset identifier
         H5T_NATIVE_DOUBLE,      // memory datatype identifier
@@ -117,10 +119,10 @@ int main() {
     }
 
     printf("Creating output file ... \n");
-    
+
     // output file
     hid_t fout = H5Fcreate(
-        "mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/serial/clusters.h5",
+        "/mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/openmp/clusters.h5",
         H5F_ACC_TRUNC,  // file access flag: if the file already exists, erase all data previously stored
         H5P_DEFAULT,    // file creation property list identifier
         H5P_DEFAULT     // file access property list identifier
@@ -135,22 +137,36 @@ int main() {
     // array to store elapsed time for each event
     double times[N_EVENTS];
 
-    // declare Event
-    static Event event;
-
     printf("Starting loop over events ...\n");
 
-    // loop over events 
-    process_event(data, &event, times, fout);
+    // setting number of threads
+    omp_set_num_threads(NUM_THREADS);
 
-    printf("\nLoop over events finished.\n");
+    // loop over events
+    #pragma omp parallel  
+    {
+        // getting actual number of threads
+        #pragma omp single
+        {
+            int actual_n_threads = omp_get_num_threads();
+            printf("Number of threads used: %d\n", actual_n_threads);
+        }
+    
+    }
 
-    // just read elapsed processing time for each event --> to be saved and compared
+    #pragma omp parallel for // each event per thread
+    for (int ev = 0; ev < N_EVENTS; ++ev) {
+
+        process_single_event(data, ev, times, fout);
+
+    }
+
+    // just read elapsed processing time for each event --> to be saved and compared!
     // for (int id = 0; id < N_EVENTS; ++id)
     // {
     //     printf("Event ID %d elapsed time (s) %f", id, times[id]);
     // }
-
+    
     // free memory and close file
     free(data);
 
@@ -161,9 +177,9 @@ int main() {
     H5Fclose(fout);
     H5Fclose(file_id);
 
-    end_t = clock();
+    end_t = omp_get_wtime();
 
-    exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; // also save it
+    exec_time = end_t - start_t; // also save it
 
     // save event execution times
 

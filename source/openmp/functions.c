@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <math.h>
-#include <time.h>
-#include <hdf5.h>           
+#include <hdf5.h>  
+#include <omp.h>         
 
 #include "constants.h" 
 #include "utils.h" 
@@ -370,8 +370,6 @@ static herr_t save_event(hid_t fout, Event *event) {
         }
         
     }
-
-    // printf("Number of clusters: %d\n", cluster_counter); // save it and save also number of particles in the event (?)
     
     event_status |= H5Gclose(event_group);
 
@@ -380,128 +378,115 @@ static herr_t save_event(hid_t fout, Event *event) {
 }
 
 // function to loop over events 
-void process_event(double *data, Event *event, double *times, hid_t fout) {
+void process_single_event(double *data, int ev, double *times, hid_t fout) {
 
-    // loop over events
-    for (int ev = 0; ev < N_EVENTS; ++ev) {
+    Event event;
 
-        // compute event time
-        clock_t start_t_ev, end_t_ev;
-        double t_event; 
+    // compute event time
+    double start_t_ev, end_t_ev, t_event; 
 
-        start_t_ev = clock();
+    start_t_ev = omp_get_wtime();
 
-        // printf("Reading event ... \n");
+    read_event(&data[ev*N_COLS], &event, ev); 
 
-        read_event(&data[ev*N_COLS], event, ev); // contains a for cycle
+    int n_part = event.n_particles;
 
-        // printf("\nEvent ID %d\n", event->id);
+    // free particles counter
+    int particle_counter = n_part;
 
-        int n_part = event->n_particles;
-        // printf("Number of particles for this event: %d\n", n_part);
-
-        // free particles counter
-        int particle_counter = n_part;
-
-        // loop over event particles
-        while (particle_counter > 0)
+    // loop over event particles
+    while (particle_counter > 0)
+    {
+        // only one particle left --> jet
+        if (particle_counter == 1)
         {
-            // only one particle left --> jet
-            if (particle_counter == 1)
-            {
-                int idx_1 = event->free_particles[0];
-                event->particles[idx_1].isJet = true;
-                event->n_clusters++;
-                break;
-            }
-
-            // compute distances for every i different from j and beam, and find minimum distances
-            double min_d_ij = D; 
-            int id_i = -1;
-            int id_j = -1;     // particles IDs
-            int idx_i = -1;
-            int idx_j = -1;   // free particles indexes
-
-            double min_d_iB = D;
-            int id_iB = -1;
-            int idx_iB = -1;
-            
-            for (int i = 0; i < particle_counter; ++i)
-            {
-                // get particle-i ID (that is the idx for particles array)
-                int free_particle_i = event->free_particles[i];
-
-                for (int j = i+1; j < particle_counter; ++j) 
-                {
-                    // get particle-j ID
-                    int free_particle_j = event->free_particles[j];
-                    
-                    double current_d_ij = compute_distance_ij(event, free_particle_i, free_particle_j);
-
-                    // update finding minimum distance ij
-                    if (current_d_ij < min_d_ij)
-                    {
-                        min_d_ij = current_d_ij;
-
-                        id_i = free_particle_i;
-                        id_j = free_particle_j;
-
-                        idx_i = i;
-                        idx_j = j;
-                    }
-            
-                }
-
-                // beam distance
-                double current_d_iB = event->particles[free_particle_i].d_B;
-
-                // update finding minimum distance iB
-                if (current_d_iB < min_d_iB)
-                {
-                    min_d_iB = current_d_iB;
-
-                    id_iB = free_particle_i;
-                    idx_iB = i;
-                }
-                
-            } 
-
-            // merge: if d_iB_min < d_ij_min, jet; else new "particle"
-            if (min_d_iB < min_d_ij)
-            {
-                // printf("Minimum distance from the beam: %.10e\n", min_d_iB);
-                event->free_particles[idx_iB] = event->free_particles[particle_counter-1];
-                event->n_clusters++;
-                event->particles[id_iB].isJet = true;
-
-            }
-            else 
-            {
-                // printf("Minimum distance between particles: %.10e\n", min_d_ij);
-                particle_update(event, id_i, id_j);
-                event->free_particles[idx_j] = event->free_particles[particle_counter-1];
-            }
-
-            particle_counter--;
-            
+            int idx_1 = event.free_particles[0];
+            event.particles[idx_1].isJet = true;
+            event.n_clusters++;
+            break;
         }
 
-        // printf("Saving event ...\n");
+        // compute distances for every i different from j and beam, and find minimum distances
+        double min_d_ij = D; 
+        int id_i = -1;
+        int id_j = -1;     // particles IDs
+        int idx_i = -1;
+        int idx_j = -1;   // free particles indexes
 
-        // save event clusters
-        save_event(fout, event);
+        double min_d_iB = D;
+        int id_iB = -1;
+        int idx_iB = -1;
+        
+        for (int i = 0; i < particle_counter; ++i)
+        {
+            // get particle-i ID (that is the idx for particles array)
+            int free_particle_i = event.free_particles[i];
 
-        // free event memory
-        event_free(event);
+            for (int j = i+1; j < particle_counter; ++j) 
+            {
+                // get particle-j ID
+                int free_particle_j = event.free_particles[j];
+                
+                double current_d_ij = compute_distance_ij(&event, free_particle_i, free_particle_j);
 
-        end_t_ev = clock();
+                // update finding minimum distance ij
+                if (current_d_ij < min_d_ij)
+                {
+                    min_d_ij = current_d_ij;
 
-        t_event = (double) (end_t_ev - start_t_ev)/CLOCKS_PER_SEC;
+                    id_i = free_particle_i;
+                    id_j = free_particle_j;
 
-        times[ev] = t_event;
+                    idx_i = i;
+                    idx_j = j;
+                }
+        
+            }
 
-        // printf("Event %d execution time: %f\n", ev, t_event);
+            // beam distance
+            double current_d_iB = event.particles[free_particle_i].d_B;
 
+            // update finding minimum distance iB
+            if (current_d_iB < min_d_iB)
+            {
+                min_d_iB = current_d_iB;
+
+                id_iB = free_particle_i;
+                idx_iB = i;
+            }
+            
+        } 
+
+        // merge: if d_iB_min < d_ij_min, jet; else new "particle"
+        if (min_d_iB < min_d_ij)
+        {
+            // printf("Minimum distance from the beam: %.10e\n", min_d_iB);
+            event.free_particles[idx_iB] = event.free_particles[particle_counter-1];
+            event.n_clusters++;
+            event.particles[id_iB].isJet = true;
+
+        }
+        else 
+        {
+            // printf("Minimum distance between particles: %.10e\n", min_d_ij);
+            particle_update(&event, id_i, id_j);
+            event.free_particles[idx_j] = event.free_particles[particle_counter-1];
+        }
+
+        particle_counter--;
+        
     }
+
+    // save event clusters
+    save_event(fout, &event);
+
+    // free event memory
+    event_free(&event);
+
+    end_t_ev = omp_get_wtime();
+
+    t_event = end_t_ev - start_t_ev;
+
+    times[ev] = t_event;
 
 }
