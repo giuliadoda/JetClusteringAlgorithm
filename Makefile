@@ -8,7 +8,7 @@
 # =========================
 
 CC = gcc
-
+NVCC = nvcc
 
 # =========================
 # Flags
@@ -16,7 +16,6 @@ CC = gcc
 
 CFLAGS = -Wall -Wextra -O0 -MMD -MP
 OMP_FLAGS = -fopenmp
-
 
 # =========================
 # Directories
@@ -27,14 +26,12 @@ INC_DIR = include
 BUILD_DIR = build
 BIN_DIR = bin
 
-
 # =========================
 # HDF5
 # =========================
 
 HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
-HDF5_LIBS   = $(shell pkg-config --libs hdf5)
-
+HDF5_LIBS = $(shell pkg-config --libs hdf5)
 
 # =========================
 # Include paths
@@ -43,8 +40,8 @@ HDF5_LIBS   = $(shell pkg-config --libs hdf5)
 INCLUDES = -I$(INC_DIR)
 
 SERIAL_INCLUDES = -I$(INC_DIR)/serial
-OMP_INCLUDES    = -I$(INC_DIR)/openmp
-
+OMP_INCLUDES = -I$(INC_DIR)/openmp
+CU_INCLUDES = -I$(INC_DIR)/cuda
 
 # =========================
 # SERIAL VERSION
@@ -97,6 +94,17 @@ endef
 
 $(foreach v,$(OMP_VERSIONS),$(eval $(call OMP_TEMPLATE,$(v))))
 
+
+# =========================
+# CUDA VERSIONS
+# =========================
+
+# CU_VERSIONS =
+
+CU_COMMON_SRC = $(SRC_DIR)/cuda/functions.cu
+CU_COMMON_OBJ = $(CU_COMMON_SRC:%.c=$(BUILD_DIR)/%.o)
+
+$(CU_COMMON_OBJ): INCLUDES += $(CU_INCLUDES)
 
 # =========================
 # Compile rule

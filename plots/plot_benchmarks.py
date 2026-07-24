@@ -1,177 +1,241 @@
 """
-
-CHECH THIS SCRIPT
-
 plot_benchmarks.py
 
-Reads the CSV produced by run_schedule.sh (columns: schedule,chunk,threads,run,time_sec)
-and produces comparison plots:
+Reads the benchmark CSV produced by run_schedule.sh
+(columns: schedule,chunk,threads,run,time_sec,h5_file) and produces two
+families of plots, one figure per OpenMP schedule type (static/dynamic/guided):
 
-  1. Execution time vs number of threads, one line per (schedule, chunk) combo.
-  2. Speedup vs number of threads (relative to threads=1), one line per (schedule, chunk).
-  3. A bar chart comparing the best time achieved by each schedule type.
+  1) execution time  vs  number of chunks
+       - one line per thread count
+       - saved as: exectime_vs_nchunks_<schedule>.png
+
+  2) speedup  vs  number of threads
+       - one line per chunk size
+       - saved as: speedup_vs_threads_<schedule>.png
 
 Usage:
-    python plot_benchmarks.py path/to/benchmark_results.csv [output_dir]
+    python3 plot_benchmarks.py \
+        --csv /mnt/POD/MCP_GD/JetClusteringAlgorithm/benchmarks/benchmark_results_openmp_schedules_threads.csv \
+        --n-events 100000 \
+        --outdir ./plots
 
-If output_dir is omitted, plots are saved next to the CSV in a "plots" subfolder.
+Notes / assumptions (read before trusting the numbers):
+
+  * "chunk" in the CSV is the OMP chunk SIZE (events per chunk), not the
+    number of chunks. To get "number of chunks" (as requested) we compute
+        n_chunks = ceil(n_events / chunk_size)
+    which requires knowing n_events (N_EVENTS in the C code). Pass it with
+    --n-events. If you don't pass it, the script falls back to plotting
+    against the raw chunk size instead of number of chunks (a warning is
+    printed).
+
+  * Rows where chunk == "default" (i.e. OMP_SCHEDULE was set without an
+    explicit chunk, e.g. "static" or "dynamic" with no number) have no
+    well-defined chunk size from the CSV alone -- OpenMP picks it internally
+    (for static, default chunk ~= n_events/threads; for dynamic/guided,
+    default chunk = 1). These rows are EXCLUDED from plot (1), since they
+    would need a threads-dependent x position. They ARE still usable as a
+    reference in plot (2) if you want (currently also excluded there for
+    consistency -- see INCLUDE_DEFAULT_CHUNK below).
+
+  * Speedup for plot (2) is computed per (schedule, chunk) group as
+        speedup(threads) = mean_time(threads=1) / mean_time(threads)
+    i.e. relative to that same schedule+chunk configuration run serially
+    within the sweep (NOT relative to a separately-timed single-threaded
+    baseline binary). If you have a true serial baseline you'd rather use,
+    set BASELINE_THREADS / adapt get_speedup() below.
+
+  * When --n-runs-per-config > 1 in your sweep, this script averages
+    time_sec across the 'run' column (mean) before computing anything else.
 """
 
+import argparse
+import math
 import sys
-import os
+from pathlib import Path
+
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# If True, rows with chunk == "default" are kept and plotted using OpenMP's
+# implicit default chunk size approximation instead of being dropped.
+# Left False by default because the "default" chunk size for static
+# schedules depends on the thread count, which complicates comparisons.
+INCLUDE_DEFAULT_CHUNK = False
 
-def load_data(csv_path: str) -> pd.DataFrame:
+SCHEDULES_ORDER = ["static", "dynamic", "guided"]
+
+
+def load_data(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
 
-    # combine schedule + chunk into a single label for grouping/legend
-    df["chunk"] = df["chunk"].astype(str)
-    df["label"] = df["schedule"] + " (" + df["chunk"] + ")"
+    required_cols = {"schedule", "chunk", "threads", "run", "time_sec"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        sys.exit(f"Error: CSV is missing expected columns: {missing}")
 
     return df
 
 
-def aggregate(df: pd.DataFrame) -> pd.DataFrame:
-    # average over repeated runs for the same (schedule, chunk, threads)
+def add_chunk_size_column(df: pd.DataFrame, n_events: int | None) -> pd.DataFrame:
+    """Adds a numeric 'chunk_size' column (NaN for 'default' rows unless
+    INCLUDE_DEFAULT_CHUNK handling is added)."""
+    df = df.copy()
+
+    def to_numeric_chunk(v):
+        if v == "default":
+            return math.nan
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return math.nan
+
+    df["chunk_size"] = df["chunk"].apply(to_numeric_chunk)
+
+    if not INCLUDE_DEFAULT_CHUNK:
+        n_dropped = df["chunk_size"].isna().sum()
+        if n_dropped:
+            print(f"Note: dropping {n_dropped} row(s) with chunk == 'default' "
+                  f"(set INCLUDE_DEFAULT_CHUNK = True to keep them).")
+        df = df.dropna(subset=["chunk_size"])
+
+    if n_events is not None:
+        df["n_chunks"] = (n_events / df["chunk_size"]).apply(math.ceil)
+    else:
+        df["n_chunks"] = df["chunk_size"]  # fallback: plot raw chunk size
+
+    return df
+
+
+def aggregate_runs(df: pd.DataFrame) -> pd.DataFrame:
+    """Averages time_sec over repeated runs for each (schedule, chunk, threads)."""
     grouped = (
-        df.groupby(["schedule", "chunk", "label", "threads"], as_index=False)
-        .agg(time_sec_mean=("time_sec", "mean"), time_sec_std=("time_sec", "std"))
+        df.groupby(["schedule", "chunk_size", "n_chunks", "threads"])["time_sec"]
+        .agg(["mean", "std", "count"])
+        .reset_index()
+        .rename(columns={"mean": "time_mean", "std": "time_std", "count": "n_runs"})
     )
     return grouped
 
 
-def plot_time_vs_threads(grouped: pd.DataFrame, out_dir: str):
-    fig, ax = plt.subplots(figsize=(10, 6))
+def plot_exectime_vs_nchunks(agg: pd.DataFrame, outdir: Path, using_n_chunks: bool):
+    xlabel = "Number of chunks" if using_n_chunks else "Chunk size (fallback, --n-events not given)"
 
-    for label, sub in grouped.groupby("label"):
-        sub = sub.sort_values("threads")
-        ax.errorbar(
-            sub["threads"],
-            sub["time_sec_mean"],
-            yerr=sub["time_sec_std"],
-            marker="o",
-            markersize=4,
-            capsize=3,
-            label=label,
-        )
-
-    ax.set_xlabel("Number of threads")
-    ax.set_ylabel("Execution time (s)")
-    ax.set_title("Execution time vs number of threads, by schedule")
-    ax.legend(fontsize=7, ncol=2, loc="upper right")
-    ax.grid(True, alpha=0.3)
-
-    fig.tight_layout()
-    out_path = os.path.join(out_dir, "time_vs_threads.png")
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"Saved: {out_path}")
-
-
-def plot_speedup_vs_threads(grouped: pd.DataFrame, out_dir: str):
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    max_threads = grouped["threads"].max()
-
-    for label, sub in grouped.groupby("label"):
-        sub = sub.sort_values("threads")
-
-        # baseline: time at threads == 1 for this label, if available
-        baseline_rows = sub[sub["threads"] == 1]
-        if baseline_rows.empty:
+    for sched in SCHEDULES_ORDER:
+        sub = agg[agg["schedule"] == sched]
+        if sub.empty:
             continue
-        baseline = baseline_rows["time_sec_mean"].values[0]
 
-        speedup = baseline / sub["time_sec_mean"]
+        fig, ax = plt.subplots(figsize=(8, 6))
 
-        ax.plot(sub["threads"], speedup, marker="o", markersize=4, label=label)
+        for threads, group in sub.groupby("threads"):
+            group = group.sort_values("n_chunks")
+            ax.plot(
+                group["n_chunks"], group["time_mean"],
+                marker="o", label=f"{threads} threads",
+            )
 
-    # ideal linear speedup reference line
-    ax.plot(
-        [1, max_threads],
-        [1, max_threads],
-        linestyle="--",
-        color="gray",
-        linewidth=1,
-        label="Ideal linear speedup",
-    )
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Execution time (s)")
+        ax.set_title(f"Execution time vs {xlabel.lower()} — schedule = {sched}")
+        ax.set_xscale("log")
+        ax.grid(True, which="both", linestyle="--", alpha=0.4)
+        ax.legend(title="Threads")
+        fig.tight_layout()
 
-    ax.set_xlabel("Number of threads")
-    ax.set_ylabel("Speedup (T1 / Tn)")
-    ax.set_title("Speedup vs number of threads, by schedule")
-    ax.legend(fontsize=7, ncol=2, loc="upper left")
-    ax.grid(True, alpha=0.3)
-
-    fig.tight_layout()
-    out_path = os.path.join(out_dir, "speedup_vs_threads.png")
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"Saved: {out_path}")
+        out_path = outdir / f"exectime_vs_nchunks_{sched}.png"
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved {out_path}")
 
 
-def plot_best_time_per_schedule(grouped: pd.DataFrame, out_dir: str):
-    # for each schedule type (ignoring chunk), find its overall best (min) time
-    # across all chunks and thread counts, and which config achieved it
-    best_rows = []
-    for schedule, sub in grouped.groupby("schedule"):
-        best = sub.loc[sub["time_sec_mean"].idxmin()]
-        best_rows.append(best)
+def compute_speedup(agg: pd.DataFrame, baseline_threads: int = 1) -> pd.DataFrame:
+    agg = agg.copy()
+    speedup_rows = []
 
-    best_df = pd.DataFrame(best_rows).sort_values("time_sec_mean")
+    for (sched, chunk_size), group in agg.groupby(["schedule", "chunk_size"]):
+        baseline_rows = group[group["threads"] == baseline_threads]
+        if baseline_rows.empty:
+            print(f"Warning: no threads={baseline_threads} baseline for "
+                  f"schedule={sched}, chunk={chunk_size}; skipping speedup for this group.")
+            continue
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+        t_baseline = baseline_rows["time_mean"].iloc[0]
 
-    bars = ax.bar(best_df["schedule"], best_df["time_sec_mean"])
+        group = group.copy()
+        group["speedup"] = t_baseline / group["time_mean"]
+        speedup_rows.append(group)
 
-    # annotate bars with the winning (chunk, threads) configuration
-    for bar, (_, row) in zip(bars, best_df.iterrows()):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height(),
-            f"chunk={row['chunk']}\nthreads={int(row['threads'])}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
+    if not speedup_rows:
+        return pd.DataFrame(columns=list(agg.columns) + ["speedup"])
 
-    ax.set_ylabel("Best execution time (s)")
-    ax.set_title("Best execution time achieved per schedule type")
-    ax.grid(True, axis="y", alpha=0.3)
+    return pd.concat(speedup_rows, ignore_index=True)
 
-    fig.tight_layout()
-    out_path = os.path.join(out_dir, "best_time_per_schedule.png")
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"Saved: {out_path}")
+
+def plot_speedup_vs_threads(speedup_df: pd.DataFrame, outdir: Path):
+    for sched in SCHEDULES_ORDER:
+        sub = speedup_df[speedup_df["schedule"] == sched]
+        if sub.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        for chunk_size, group in sub.groupby("chunk_size"):
+            group = group.sort_values("threads")
+            ax.plot(
+                group["threads"], group["speedup"],
+                marker="o", label=f"chunk = {int(chunk_size)}",
+            )
+
+        # ideal linear speedup reference line
+        max_threads = sub["threads"].max()
+        ax.plot([1, max_threads], [1, max_threads], linestyle="--", color="gray",
+                alpha=0.6, label="ideal (linear)")
+
+        ax.set_xlabel("Number of threads")
+        ax.set_ylabel("Speedup (T1 / Tn, same schedule+chunk)")
+        ax.set_title(f"Speedup vs number of threads — schedule = {sched}")
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.legend(title="Chunk size")
+        fig.tight_layout()
+
+        out_path = outdir / f"speedup_vs_threads_{sched}.png"
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved {out_path}")
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--csv", required=True, type=Path,
+                         help="Path to benchmark_results_openmp_schedules_threads.csv")
+    parser.add_argument("--n-events", type=int, default=None,
+                         help="N_EVENTS used in the C benchmark (needed to convert "
+                              "chunk size -> number of chunks). If omitted, plot (1) "
+                              "falls back to raw chunk size on the x-axis.")
+    parser.add_argument("--baseline-threads", type=int, default=1,
+                         help="Thread count used as the serial baseline for speedup (default: 1)")
+    parser.add_argument("--outdir", type=Path, default=Path("./plots"),
+                         help="Directory where PNG plots are saved (default: ./plots)")
+    args = parser.parse_args()
 
-    csv_path = sys.argv[1]
+    if not args.csv.exists():
+        sys.exit(f"Error: CSV not found at {args.csv}")
 
-    if len(sys.argv) >= 3:
-        out_dir = sys.argv[2]
-    else:
-        out_dir = os.path.join(os.path.dirname(os.path.abspath(csv_path)), "plots")
+    args.outdir.mkdir(parents=True, exist_ok=True)
 
-    os.makedirs(out_dir, exist_ok=True)
+    df = load_data(args.csv)
+    df = add_chunk_size_column(df, args.n_events)
 
-    df = load_data(csv_path)
-    grouped = aggregate(df)
+    agg = aggregate_runs(df)
 
-    plot_time_vs_threads(grouped, out_dir)
-    plot_speedup_vs_threads(grouped, out_dir)
-    plot_best_time_per_schedule(grouped, out_dir)
+    plot_exectime_vs_nchunks(agg, args.outdir, using_n_chunks=args.n_events is not None)
 
-    # also dump the aggregated table as CSV, handy for a quick look / report table
-    summary_path = os.path.join(out_dir, "summary_aggregated.csv")
-    grouped.sort_values(["schedule", "chunk", "threads"]).to_csv(summary_path, index=False)
-    print(f"Saved: {summary_path}")
+    speedup_df = compute_speedup(agg, baseline_threads=args.baseline_threads)
+    plot_speedup_vs_threads(speedup_df, args.outdir)
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":

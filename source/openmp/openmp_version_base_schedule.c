@@ -10,12 +10,14 @@
 #include "functions.h"  
 
 
-#define NUM_THREADS 2
-
-
 // ----------- MAIN -------------
 
-int main() {
+int main(int argc, char *argv[]) {
+
+    const char *out_path = "/mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/openmp/clusters.h5";
+    if (argc > 1) {
+        out_path = argv[1];
+    }
 
     // execution time
     double start_t, end_t, exec_time;
@@ -135,12 +137,14 @@ int main() {
     }
 
     // array to store elapsed time for each event
-    double times[N_EVENTS];
+    double *times = malloc(N_EVENTS * sizeof(double));
+    if (times == NULL) {
+        fprintf(stderr, "Failed to allocate times buffer\n");
+        free(data);
+        return EXIT_FAILURE;
+    }
 
     printf("Starting loop over events ...\n");
-
-    // setting number of threads
-    omp_set_num_threads(NUM_THREADS);
 
     // loop over events
     #pragma omp parallel  
@@ -161,11 +165,59 @@ int main() {
 
     }
 
-    // just read elapsed processing time for each event --> to be saved and compared!
-    // for (int id = 0; id < N_EVENTS; ++id)
-    // {
-    //     printf("Event ID %d elapsed time (s) %f", id, times[id]);
-    // }
+    // save elapsed times for each run
+    {
+        hsize_t times_dim[1] = { (hsize_t)N_EVENTS };
+        hid_t times_space = H5Screate_simple(
+            1, 
+            times_dim, 
+            NULL);
+        if (times_space < 0) {
+
+            fprintf(stderr, "Cannot create dataspace for times\n");
+
+        } 
+        else {
+            
+            hid_t times_dset = H5Dcreate2(
+                fout, 
+                "/times", 
+                H5T_NATIVE_DOUBLE, 
+                times_space,
+                H5P_DEFAULT, 
+                H5P_DEFAULT, 
+                H5P_DEFAULT
+            );
+
+            if (times_dset < 0) {
+
+                fprintf(stderr, "Cannot create /times dataset\n");
+
+            } 
+            
+            else {
+
+                herr_t werr = H5Dwrite(
+                    times_dset, 
+                    H5T_NATIVE_DOUBLE, 
+                    H5S_ALL, 
+                    H5S_ALL,
+                    H5P_DEFAULT, 
+                    times
+                );
+                
+                if (werr < 0) {
+                    fprintf(stderr, "Cannot write /times dataset\n");
+                }
+                
+                H5Dclose(times_dset);
+
+            }
+
+            H5Sclose(times_space);
+
+        }
+    }
     
     // free memory and close file
     free(data);
@@ -179,9 +231,7 @@ int main() {
 
     end_t = omp_get_wtime();
 
-    exec_time = end_t - start_t; // also save it
-
-    // save event execution times
+    exec_time = end_t - start_t; 
 
     printf("\nExecution time (total, %d events): %f (sec)\n\n", N_EVENTS, exec_time);
 
