@@ -79,7 +79,7 @@ static double compute_distance_ij(Event *ev, int i, int j) {
     // recall that phi is periodic
     if (diff_phi > M_PI)
     {
-        diff_phi = 2.*M_1_PI - diff_phi;
+        diff_phi = 2.*M_PI - diff_phi;
     }
 
     double deltaR2 = diff_eta*diff_eta + diff_phi*diff_phi;
