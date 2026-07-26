@@ -1,4 +1,4 @@
-// FIRST VERSION: serial loop over events, parallelizing over minimum distance calculation
+// strategy: each event per block 
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,10 +9,16 @@
 
 #include "constants.h" 
 #include "utils.h"  
-#include "functions.h"
+#include "functions.cuh"
 
 
 int main() {
+
+    // execution time --> am I getting this right?
+    clock_t start_t, end_t;
+    double exec_time;
+
+    start_t = clock();
 
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
@@ -48,8 +54,6 @@ int main() {
     hsize_t dataset_dims[2];
 
     H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
-
-    printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
     
     // read dataset (only the selected number of events)
     int start_row = 0;
@@ -134,69 +138,40 @@ int main() {
     int times_size = N_EVENTS * sizeof(double);
     cudaMalloc((void **)&dev_t, times_size);
 
-    // compute number of blocks and threads per blocks
-    int N_blocks;
-    int N_thr_bl;
+    // also for data
+    // TO DO
 
-    // loop over events
-    for (int ev = 0; ev < N_EVENTS; ++ev)
-    {
-        Event event;
+    // define number of blocks and threads per blocks
+    int N_blocks = N_EVENTS;
+    int N_thr_bl = 128; // maybe change later
 
-        // read event
+    // calculate amount of shared memory needed --> CHECK IT
+    size_t shared_mem_size = N_thr_bl * (2*sizeof(double) + 3*sizeof(int));
 
-        int n_part = event.n_particles;
+    processEvent<<<N_blocks, N_thr_bl, shared_mem_size>>>();
 
-        // free particles counter
-        int particle_counter = n_part;
+    // get data from GPU
 
-        // loop over free particles
-        while (particle_counter > 0)
-        {
-            // only one particle left --> jet
-            if (particle_counter == 1)
-            {
-                int idx_1 = event.free_particles[0];
-                event.particles[idx_1].isJet = true;
-                event.n_clusters++;
-                break;
-            }
+    // save clustering results
 
-            // compute distance (parallelizing)
+    // free memory and close file
+    free(data);
 
-            int event_size = sizeof(Event);
-            cudaMalloc((void **)&event, event_size);
+    H5Sclose(memspace); 
+    H5Sclose(space_id);
+    H5Dclose(dset_id);
 
-            // allocate memory on GPU for data
-            int ev_data_size = ev * N_COLS * sizeof(double);
-            double event_data = data[ev * N_COLS];
-            double *dev_data;
-            cudaMalloc((void **)&dev_data, ev_data_size);
+    H5Fclose(fout);
+    H5Fclose(file_id);
 
-            // copy data from host to device
-            cudaMemcpy(dev_data, event_data, ev_data_size, cudaMemcpyHostToDevice);
+    end_t = clock();
 
-            // launch kernel for distance computation
+    exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; // also save it
 
-            // merge
+    // save event execution times
 
-            particle_counter--;
+    printf("\nExecution time (total, %d events): %f (sec)\n\n", N_EVENTS, exec_time);
 
-            // free GPU memory
-            cudaFree(event);
-            cudaFree(dev_data);
-
-        }
-
-        // save event clusters
-
-        // free event memory
-
-
-
-
-    }
-    
-
+    return 0;
 
 }

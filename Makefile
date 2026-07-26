@@ -96,7 +96,7 @@ $(foreach v,$(OMP_VERSIONS),$(eval $(call OMP_TEMPLATE,$(v))))
 
 
 # =========================
-# CUDA VERSIONS
+# CUDA VERSIONS (to be completed)
 # =========================
 
 # CU_VERSIONS =
