@@ -17,7 +17,7 @@ Usage:
     python3 plot_benchmarks.py \
         --csv /mnt/POD/MCP_GD/JetClusteringAlgorithm/benchmarks/benchmark_results_openmp_schedules_threads.csv \
         --n-events 100000 \
-        --outdir ./plots
+        --outdir ./figures
 
 Notes / assumptions (read before trusting the numbers):
 

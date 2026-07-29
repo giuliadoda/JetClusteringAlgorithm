@@ -22,25 +22,16 @@
     } while (0)
 
 // ------------------------------------------------------------------
-// estrae un evento dal buffer grezzo (equivalente alla parte iniziale
-// di read_event, ma scrive dentro array SoA gia' allocati per tutti
-// gli eventi, invece di allocare un Event per volta)
+// numero di particelle reali in un evento (stesso criterio di padding
+// di read_event): serve solo per sapere fino a dove leggere quando
+// scriviamo l'output, non per preparare dati per la GPU.
 // ------------------------------------------------------------------
-static int extract_event(const double* data, int ev,
-                          double* pt_out, double* eta_out, double* phi_out)
+static int getNPart(const double* data, int ev)
 {
     long base_col = (long)ev * N_COLS;
-
     int n_part = 0;
     while (n_part < MAX_P && data[base_col + N_FEAT*n_part] != 0.0) {
         n_part++;
-    }
-
-    for (int p = 0; p < n_part; ++p) {
-        long idx = base_col + N_FEAT*p;
-        pt_out[p]  = data[idx];
-        eta_out[p] = data[idx+1];
-        phi_out[p] = data[idx+2];
     }
     return n_part;
 }
@@ -60,7 +51,7 @@ static int findRoot(const int* parentOf, int slot)
 // eta/phi/pt e uno (n_part) con il jetID, pronti per l'istogramma 2D
 // ------------------------------------------------------------------
 static herr_t save_event_flat(hid_t fout, int ev, int n_part,
-                               const double* eta, const double* phi, const double* pt,
+                               const double* data,   // buffer grezzo completo
                                const int* jetID)
 {
     char event_name[64];
@@ -73,13 +64,15 @@ static herr_t save_event_flat(hid_t fout, int ev, int n_part,
     }
 
     herr_t status = 0;
+    long base_col = (long)ev * N_COLS;
 
-    // ---- kinematics: (n_part, 3) = [eta, phi, pt] ----
+    // ---- kinematics: (n_part, 3) = [eta, phi, pt] letti direttamente da data ----
     double* kin = (double*)malloc((size_t)n_part * 3 * sizeof(double));
     for (int p = 0; p < n_part; ++p) {
-        kin[3*p+0] = eta[p];
-        kin[3*p+1] = phi[p];
-        kin[3*p+2] = pt[p];
+        long idx = base_col + N_FEAT*p;
+        kin[3*p+0] = data[idx+1];   // eta
+        kin[3*p+1] = data[idx+2];   // phi
+        kin[3*p+2] = data[idx+0];   // pt
     }
 
     hsize_t kdims[2] = { (hsize_t)n_part, 3 };
@@ -157,48 +150,21 @@ int main()
         H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
     if (fout < 0) { fprintf(stderr, "Cannot create output file\n"); return EXIT_FAILURE; }
 
-    // ---------------- conversione in SoA (host) ----------------
-    printf("Converting to SoA layout ...\n");
+    // ---------------- allocazione e copia su device: buffer grezzo 1:1 ----------------
+    // Nessuna conversione SoA sull'host: data ha gia' il layout che serve
+    // (data[ev*N_COLS + N_FEAT*p + feat]), lo copiamo cosi' com'e'.
+    printf("Copying raw data to device ...\n");
 
-    double* pt_h  = (double*)calloc((size_t)N_EVENTS * MAX_P, sizeof(double));
-    double* eta_h = (double*)calloc((size_t)N_EVENTS * MAX_P, sizeof(double));
-    double* phi_h = (double*)calloc((size_t)N_EVENTS * MAX_P, sizeof(double));
-    int*    nPart_h = (int*)malloc((size_t)N_EVENTS * sizeof(int));
+    double *d_data;
+    int    *d_parentOf;
 
-    if (!pt_h || !eta_h || !phi_h || !nPart_h) {
-        fprintf(stderr, "Failed to allocate SoA buffers\n");
-        return EXIT_FAILURE;
-    }
+    size_t dataBytes = (size_t)N_EVENTS * N_COLS * sizeof(double);
+    size_t intBytes  = (size_t)N_EVENTS * MAX_P * sizeof(int);
 
-    for (int ev = 0; ev < N_EVENTS; ++ev) {
-        long base = (long)ev * MAX_P;
-        nPart_h[ev] = extract_event(data, ev, pt_h+base, eta_h+base, phi_h+base);
-    }
-
-    // i dati grezzi non servono piu' sulla GPU: pt_h/eta_h/phi_h bastano
-    // anche dopo il kernel (per scrivere l'output usiamo questi, non
-    // quelli modificati dal kernel, che restano solo sul device)
-
-    // ---------------- allocazione e copia su device ----------------
-    printf("Allocating device memory ...\n");
-
-    double *d_pt, *d_eta, *d_phi;
-    int    *d_nPart, *d_isJet, *d_parentOf;
-
-    size_t soaBytes = (size_t)N_EVENTS * MAX_P * sizeof(double);
-    size_t intBytes = (size_t)N_EVENTS * MAX_P * sizeof(int);
-
-    CUDA_CHECK(cudaMalloc(&d_pt,  soaBytes));
-    CUDA_CHECK(cudaMalloc(&d_eta, soaBytes));
-    CUDA_CHECK(cudaMalloc(&d_phi, soaBytes));
-    CUDA_CHECK(cudaMalloc(&d_nPart, N_EVENTS * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_isJet, intBytes));
+    CUDA_CHECK(cudaMalloc(&d_data, dataBytes));
     CUDA_CHECK(cudaMalloc(&d_parentOf, intBytes));
 
-    CUDA_CHECK(cudaMemcpy(d_pt,  pt_h,  soaBytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_eta, eta_h, soaBytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_phi, phi_h, soaBytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_nPart, nPart_h, N_EVENTS * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_data, data, dataBytes, cudaMemcpyHostToDevice));
 
     // ---------------- lancio kernel: un blocco per evento ----------------
     printf("Launching kernel ...\n");
@@ -207,20 +173,18 @@ int main()
     size_t dynShared = threadsPerBlock * (2*sizeof(double) + 3*sizeof(int));
 
     antikt_kernel<<<N_EVENTS, threadsPerBlock, dynShared>>>(
-        d_pt, d_eta, d_phi, d_nPart, d_isJet, d_parentOf, N_EVENTS);
+        d_data, N_COLS, d_parentOf, N_EVENTS);
 
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // ---------------- copia indietro SOLO isJet e parentOf ----------------
-    int* isJet_h    = (int*)malloc(intBytes);
+    // ---------------- copia indietro SOLO parentOf ----------------
     int* parentOf_h = (int*)malloc(intBytes);
-    if (!isJet_h || !parentOf_h) {
+    if (!parentOf_h) {
         fprintf(stderr, "Failed to allocate output buffers\n");
         return EXIT_FAILURE;
     }
 
-    CUDA_CHECK(cudaMemcpy(isJet_h,    d_isJet,    intBytes, cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(parentOf_h, d_parentOf, intBytes, cudaMemcpyDeviceToHost));
 
     // ---------------- ricostruzione jetID + scrittura output ----------------
@@ -230,29 +194,21 @@ int main()
 
     for (int ev = 0; ev < N_EVENTS; ++ev) {
         long base = (long)ev * MAX_P;
-        int n_part = nPart_h[ev];
+        int n_part = getNPart(data, ev);   // stesso criterio di padding, letto da data
 
         for (int p = 0; p < n_part; ++p) {
             jetID_buf[p] = findRoot(parentOf_h + base, p);
         }
 
-        save_event_flat(fout, ev, n_part,
-                         eta_h + base, phi_h + base, pt_h + base,
-                         jetID_buf);
+        save_event_flat(fout, ev, n_part, data, jetID_buf);
     }
 
     // ---------------- pulizia ----------------
     free(jetID_buf);
-    free(isJet_h);
     free(parentOf_h);
-    free(pt_h); free(eta_h); free(phi_h); free(nPart_h);
     free(data);
 
-    CUDA_CHECK(cudaFree(d_pt));
-    CUDA_CHECK(cudaFree(d_eta));
-    CUDA_CHECK(cudaFree(d_phi));
-    CUDA_CHECK(cudaFree(d_nPart));
-    CUDA_CHECK(cudaFree(d_isJet));
+    CUDA_CHECK(cudaFree(d_data));
     CUDA_CHECK(cudaFree(d_parentOf));
 
     H5Sclose(memspace);

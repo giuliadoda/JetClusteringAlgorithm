@@ -16,10 +16,13 @@
 #include <cstdio>
 #include <cfloat>
 #include <cmath>
-#include <cuda_runtime>
+#include <cuda_runtime.h>
 
 #ifndef MAX_P
-#define MAX_P 700     // deve combaciare con MAX_P/N_FEAT di constants.h
+#define MAX_P 700     // deve combaciare con MAX_P di constants.h
+#endif
+#ifndef N_FEAT
+#define N_FEAT 3      // p_t, eta, phi -- deve combaciare con N_FEAT di constants.h
 #endif
 
 #define R_PARAM   0.4
@@ -32,32 +35,32 @@ __device__ __forceinline__ double deltaPhi(double phi_i, double phi_j) {
 }
 
 // Un blocco = un evento.
-// Input (device, SoA, dimensione nEvents*MAX_P): pt_in, eta_in, phi_in
-// nPart_in[ev]: numero di particelle reali per l'evento ev (resto = padding)
+// Input: data_in e' il buffer GREZZO, stesso layout di quello letto da HDF5:
+//   data_in[ev*N_COLS + N_FEAT*p + 0/1/2] = p_t/eta/phi della particella p
+// Nessuna conversione SoA preventiva: il kernel scopre da solo quali slot
+// sono particelle reali (p_t != 0) e quante sono (nActive), esattamente
+// come faceva read_event sull'host.
 // Output:
-//   isJet[base+p]    = 1 se lo slot p e' un jet finale
-//   parentOf[base+p] = union-find: risalendo la catena si trova la radice
-//                      (= id del jet a cui la particella originale p appartiene)
+//   parentOf[base+p] = union-find: risalendo la catena si trova la radice.
+//   Uno slot p e' un jet finale se e solo se, dopo il kernel, la sua
+//   radice e' se stesso (nessuno lo ha mai assorbito) -- non serve un
+//   array isJet separato, e' ridondante con questa proprieta'.
 __global__ void antikt_kernel(
-        const double* __restrict__ pt_in,
-        const double* __restrict__ eta_in,
-        const double* __restrict__ phi_in,
-        const int*    __restrict__ nPart_in,
-        int* __restrict__ isJet,
+        const double* __restrict__ data_in,
+        int N_COLS,
         int* __restrict__ parentOf,
         int nEvents)
 {
     int ev = blockIdx.x;
     if (ev >= nEvents) return;
-    int tid      = threadIdx.x;
-    int nThreads = blockDim.x;
-    int base     = ev * MAX_P;
-    int nPart    = nPart_in[ev];
-    if (nPart == 0) return;
+    int tid       = threadIdx.x;
+    int nThreads  = blockDim.x;
+    long base_col = (long)ev * N_COLS;   // offset nel buffer grezzo
+    int  base      = ev * MAX_P;         // offset nell'output (parentOf)
 
     __shared__ double s_pt[MAX_P], s_eta[MAX_P], s_phi[MAX_P], s_dB[MAX_P];
     __shared__ int    s_free[MAX_P];   // equivalente di event->free_particles
-    __shared__ int    nActive;
+    __shared__ int    nActive; // diventato free particle counter per consistenza
 
     // shared memory dinamica: due reduction parallele (d_ij e d_iB)
     extern __shared__ char dyn[];
@@ -67,28 +70,33 @@ __global__ void antikt_kernel(
     double* r_valB  = (double*)(r_idxJ + nThreads);
     int*    r_idxB  = (int*)(r_valB + nThreads);
 
-    // ---- equivalente di read_event: inizializzazione ----
-    for (int p = tid; p < nPart; p += nThreads) {
-        double pt = pt_in[base+p];
-        s_pt[p]  = pt;
-        s_eta[p] = eta_in[base+p];
-        s_phi[p] = phi_in[base+p];
-        s_dB[p]  = 1.0/(pt*pt);
-        s_free[p] = p;
-        parentOf[base+p] = p;   // ogni particella e' inizialmente radice di se stessa
-        isJet[base+p] = 0;
-    }
-    if (tid == 0) nActive = nPart;
+    if (tid == 0) nActive = 0;
     __syncthreads();
+
+    // ---- equivalente di read_event: scopre le particelle reali e le carica ----
+    for (int p = tid; p < MAX_P; p += nThreads) {
+        parentOf[base+p] = p;   // ogni slot e' inizialmente radice di se stesso
+
+        double pt = data_in[base_col + N_FEAT*p + 0];
+        if (pt != 0.0) {                 // stesso criterio di padding di read_event
+            s_pt[p]  = pt;
+            s_eta[p] = data_in[base_col + N_FEAT*p + 1];
+            s_phi[p] = data_in[base_col + N_FEAT*p + 2];
+            s_dB[p]  = 1.0/(pt*pt);
+            int pos  = atomicAdd(&nActive, 1);   // posizione compattata, in ordine di scoperta
+            s_free[pos] = p;
+        }
+    }
+    __syncthreads();
+
+    if (nActive == 0) return;
 
     // ---- equivalente di: while (particle_counter > 0) ----
     while (nActive > 0) {
 
         if (nActive == 1) {
             if (tid == 0) {
-                int slot = s_free[0];
-                isJet[base+slot] = 1;
-                nActive = 0;
+                nActive = 0;   // l'unico slot rimasto in s_free e' gia' radice di se stesso
             }
             __syncthreads();
             continue;
@@ -96,6 +104,7 @@ __global__ void antikt_kernel(
 
         double bestIJ = DBL_MAX; 
         int bestI = -1, bestJ = -1;
+
         double bestB  = DBL_MAX; 
         int bestBi = -1;
 
@@ -130,10 +139,13 @@ __global__ void antikt_kernel(
         for (int s = nThreads/2; s > 0; s >>= 1) {
             if (tid < s) {
                 if (r_valIJ[tid+s] < r_valIJ[tid]) {
-                    r_valIJ[tid]=r_valIJ[tid+s]; r_idxI[tid]=r_idxI[tid+s]; r_idxJ[tid]=r_idxJ[tid+s];
+                    r_valIJ[tid]=r_valIJ[tid+s]; 
+                    r_idxI[tid]=r_idxI[tid+s]; 
+                    r_idxJ[tid]=r_idxJ[tid+s];
                 }
                 if (r_valB[tid+s] < r_valB[tid]) {
-                    r_valB[tid]=r_valB[tid+s]; r_idxB[tid]=r_idxB[tid+s];
+                    r_valB[tid]=r_valB[tid+s]; 
+                    r_idxB[tid]=r_idxB[tid+s];
                 }
             }
             __syncthreads();
@@ -146,12 +158,9 @@ __global__ void antikt_kernel(
 
             if (min_d_iB < min_d_ij) {
                 int idxB  = r_idxB[0];
-                int slotB = s_free[idxB];
-                isJet[base+slotB] = 1;
                 s_free[idxB] = s_free[nActive-1];   // swap-remove, come nel seriale
                 nActive--;
-            } 
-            else {
+            } else {
                 int idxI = r_idxI[0], idxJ = r_idxJ[0];
                 int slotI = s_free[idxI], slotJ = s_free[idxJ];
 
@@ -180,15 +189,19 @@ __global__ void antikt_kernel(
 //                                // di ottimizzarlo ora
 //   size_t dynShared = threadsPerBlock * (2*sizeof(double) + 3*sizeof(int));
 //   antikt_kernel<<<N_EVENTS, threadsPerBlock, dynShared>>>(
-//       d_pt, d_eta, d_phi, d_nPart, d_isJet, d_parentOf, N_EVENTS);
+//       d_data, N_COLS, d_parentOf, N_EVENTS);
 //
-// Dopo il lancio: cudaMemcpy indietro SOLO isJet e parentOf (due array di
-// int, size N_EVENTS*MAX_P ciascuno). pt/eta/phi originali li hai gia'
-// sull'host (data[]) e non servono ricopiati: per l'istogramma ti serve
-// la cinematica ORIGINALE di ogni particella, non quella del pseudo-jet.
+// d_data e' semplicemente una copia 1:1 del buffer "data" letto da HDF5
+// (cudaMemcpy diretto, nessuna conversione SoA sull'host).
+//
+// Dopo il lancio: cudaMemcpy indietro SOLO parentOf (un array di int,
+// size N_EVENTS*MAX_P). pt/eta/phi originali li hai gia' sull'host in
+// data[] e non servono ricopiati: per l'istogramma ti serve la
+// cinematica ORIGINALE di ogni particella, non quella del pseudo-jet.
 //
 // Ricostruzione jetID sull'host (equivalente a leggere Particle.components,
-// ma con un semplice union-find):
+// ma con un semplice union-find). Uno slot p e' un jet finale se e solo
+// se findRoot(p) == p:
 //
 //   static int findRoot(const int* parentOf, int slot) {
 //       while (parentOf[slot] != slot) slot = parentOf[slot];
