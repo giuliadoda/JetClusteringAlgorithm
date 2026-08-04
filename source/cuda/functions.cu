@@ -46,7 +46,7 @@ __global__ void processEvent(
     int event_offset = ev * N_COLS;
     int particle_offset = ev * MAX_P; // check it, maybe define it after getting n_part is better
 
-    // initialize shared data (among all threads)
+    // initialize shared data (among all threads, limited to block)
     // to store kinematics
     __shared__ double pt_s[MAX_P];
     __shared__ double eta_s[MAX_P];
@@ -185,7 +185,32 @@ __global__ void processEvent(
         __syncthreads();
 
         // reduction to find minima
+        // k >>= 1 means shift bits to the right (divide by 2)
+        for (int k = block_dim/2; k > 0; k >>= 1)
+        {
+            if (thr_id < k)
+            {
+                if (s_d_ij[thr_id+k] < s_d_ij[thr_id])
+                {
+                    s_d_ij[thr_id] = s_d_ij[thr_id+k];
 
+                    s_idx_i[thr_id] = s_idx_i[thr_id+k];
+                    s_idx_j[thr_id] = s_idx_j[thr_id+k];
+                }
+
+                if (s_d_iB[thr_id+k] < s_d_iB[thr_id])
+                {
+                    s_d_iB[thr_id] = s_d_iB[thr_id+k];
+
+                    s_idx_iB[thr_id] = s_idx_iB[thr_id+k];
+                }
+                
+            }
+            
+        }
+
+        __syncthreads();
+        
         // merging
         
     }
