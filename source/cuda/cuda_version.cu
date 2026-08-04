@@ -11,6 +11,7 @@
 #include "utils.h"  
 #include "functions.cuh"
 
+// add CUDA error checking
 
 int main() {
 
@@ -19,6 +20,11 @@ int main() {
     double exec_time;
 
     start_t = clock();
+
+    // CUDA timers
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
 
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
@@ -112,7 +118,7 @@ int main() {
     
     // output file
     hid_t fout = H5Fcreate(
-        "mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/serial/clusters.h5",
+        "/mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/cuda/clusters.h5",
         H5F_ACC_TRUNC,  // file access flag: if the file already exists, erase all data previously stored
         H5P_DEFAULT,    // file creation property list identifier
         H5P_DEFAULT     // file access property list identifier
@@ -125,37 +131,64 @@ int main() {
     }
 
     // array to store elapsed time for each event, to be passed to GPU
-    double *times = malloc(N_EVENTS * sizeof(double));
+    float *times = malloc(N_EVENTS * sizeof(float));
 
-    if (times == NULL) {
-        fprintf(stderr, "Failed to allocate times buffer\n");
-        free(data);
-        return EXIT_FAILURE;
-    }
+    // array to store cluster trace
+    int *cluster_trace = malloc(N_EVENTS*MAX_P*sizeof(int));
 
     // allocate memory on GPU
-    double *dev_t; // pointer to GPU memory for times array
-    int times_size = N_EVENTS * sizeof(double);
-    cudaMalloc((void **)&dev_t, times_size);
+    double *dev_data;
+    int data_size = n_read * N_COLS * sizeof(double);
+    cudaMalloc((void**)&dev_data, data_size);
 
-    // also for data
-    // TO DO
+    int *dev_cluster_trace;
+    int cluster_trace_size = N_EVENTS * MAX_P * sizeof(int);
+    cudaMalloc((void**)&dev_cluster_trace, cluster_trace_size);
+
+    float *dev_times; // pointer to GPU memory for times array
+    int times_size = N_EVENTS * sizeof(float);
+    cudaMalloc((void **)&dev_times, times_size);
+
+    // copy data from host to device
+    cudaMemcpy(dev_data, data, data_size, cudaMemcpyHostToDevice);
 
     // define number of blocks and threads per blocks
     int N_blocks = N_EVENTS;
-    int N_thr_bl = 128; // maybe change later
+    int N_thr_bl = MAX_P;
 
-    // calculate amount of shared memory needed --> CHECK IT
+    // calculate amount of dynamic shared memory needed 
     size_t shared_mem_size = N_thr_bl * (2*sizeof(double) + 3*sizeof(int));
 
-    processEvent<<<N_blocks, N_thr_bl, shared_mem_size>>>();
+    // kernel launch
+    cudaEventRecord(start);
 
-    // get data from GPU
+    processEvent<<<N_blocks, N_thr_bl, shared_mem_size>>>(dev_data, dev_cluster_trace, dev_times);
+
+    cudaGetLastError();
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float kernel_ms = 0;
+    cudaEventElapsedTime(&kernel_ms, start, stop);
+
+    cudaMemcpy(cluster_trace, dev_cluster_trace, cluster_trace_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(times, dev_times, times_size, cudaMemcpyDeviceToHost);
 
     // save clustering results
+    // TO DO
 
     // free memory and close file
     free(data);
+    free(times);
+    free(cluster_trace);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    cudaFree(dev_data);
+    cudaFree(dev_cluster_trace);
+    cudaFree(dev_times);
 
     H5Sclose(memspace); 
     H5Sclose(space_id);
@@ -166,7 +199,7 @@ int main() {
 
     end_t = clock();
 
-    exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; // also save it
+    exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; 
 
     // save event execution times
 

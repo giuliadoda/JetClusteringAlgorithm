@@ -95,16 +95,31 @@ endef
 $(foreach v,$(OMP_VERSIONS),$(eval $(call OMP_TEMPLATE,$(v))))
 
 
+## =========================
+# CUDA VERSION
 # =========================
-# CUDA VERSIONS (to be completed)
-# =========================
 
-# CU_VERSIONS =
+CUDA_MAIN = cuda_version
 
-CU_COMMON_SRC = $(SRC_DIR)/cuda/functions.cu
-CU_COMMON_OBJ = $(CU_COMMON_SRC:%.c=$(BUILD_DIR)/%.o)
+CUDA_SRC = \
+	$(SRC_DIR)/cuda/cuda_version.cu \
+	$(SRC_DIR)/cuda/functions.cu
 
-$(CU_COMMON_OBJ): INCLUDES += $(CU_INCLUDES)
+CUDA_OBJ = $(CUDA_SRC:%.cu=$(BUILD_DIR)/%.o)
+
+NVFLAGS = -O0 -MMD -MP
+
+$(CUDA_OBJ): INCLUDES += $(CU_INCLUDES)
+
+cuda: $(BIN_DIR)/$(CUDA_MAIN)
+
+$(BIN_DIR)/$(CUDA_MAIN): $(CUDA_OBJ)
+	@mkdir -p $(BIN_DIR)
+	$(NVCC) $(CUDA_OBJ) -o $@ $(HDF5_LIBS)
+
+$(BUILD_DIR)/%.o: %.cu
+	@mkdir -p $(dir $@)
+	$(NVCC) $(NVFLAGS) $(HDF5_CFLAGS) $(INCLUDES) -c $< -o $@
 
 # =========================
 # Compile rule
@@ -122,15 +137,15 @@ $(BUILD_DIR)/%.o: %.c
 clean:
 	rm -rf $(BUILD_DIR) $(BIN_DIR)
 
-rebuild: clean serial openmp
+all: serial openmp cuda
 
-all: serial openmp
-
+rebuild: clean all
 
 # automatic header dependencies
 -include $(SERIAL_OBJ:.o=.d)
 -include $(OMP_ALL_OBJ:.o=.d)
 -include $(OMP_COMMON_OBJ:.o=.d)
+-include $(CUDA_OBJ:.o=.d)
 
 
-.PHONY: serial openmp all clean rebuild
+.PHONY: serial openmp cuda clean rebuild all

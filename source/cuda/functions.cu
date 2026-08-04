@@ -8,7 +8,7 @@
 #include "functions.cuh" 
 
 
-// to ocmpute difference between phi angle when computing distance
+// to compute difference between phi angle when computing distance
 // __forceinline__ to avoid overhead basically
 __device__ __forceinline__ double deltaPhi(double phi_i, double phi_j) {
     
@@ -24,17 +24,19 @@ __device__ __forceinline__ double deltaPhi(double phi_i, double phi_j) {
 }
 
 
-// main kernel (each event for each block)
-// cluster_trace for each event is something like: [0, 0, 5, 3, 3, 7, ...] meaning that particles 1 has been merged into particle 0, particle 2 into particle 5, particle 4 into 3, 5 into 7
+// main kernel (one CUDA block processes an event)
+// cluster_trace for each event is something like: [0, 0, 5, 3, 3, 7, ...] meaning that particles 1 has been merged into particle 0, particle 2 into particle 5, particle 4 into 3, 5 into 7, ...
+// __restrict__ to avoid pointer aliasing (make sure arrays won't overlap, knowing this info at compile time can improve performance 2x)
 __global__ void processEvent(
     const double* __restrict__ data,
-    int* __restrict__ clusters_trace // ID of final particle each particle (<--> array position) has been merged to 
+    int* __restrict__ clusters_trace, // ID of parent particle for each particle  
+    float* __restrict__ times
 ) {
 
     // get block index
     int ev = blockIdx.x;
 
-    if (ev > N_EVENTS)
+    if (ev >= N_EVENTS)
     {
         return;
     }
@@ -43,8 +45,17 @@ __global__ void processEvent(
     int thr_id = threadIdx.x;
     int block_dim = blockDim.x; // number of threads
 
-    int event_offset = ev * N_COLS;
-    int particle_offset = ev * MAX_P; // check it, maybe define it after getting n_part is better
+    int event_offset = ev * N_COLS; // to navigate data
+    int particle_offset = ev * MAX_P; 
+
+    // per-event timing (managed by thread 0)
+    int start_event = 0;
+    if (thr_id == 0)
+    {
+        start_event = clock();
+    }
+
+    __syncthreads();
 
     // initialize shared data (among all threads, limited to block)
     // to store kinematics
@@ -54,18 +65,19 @@ __global__ void processEvent(
     __shared__ double dB_s[MAX_P];
 
     // to keep track of clusterized particles
-    __shared__ int free_p_s[MAX_P]; // maybe initialize it after getting n_part
+    __shared__ int free_p_s[MAX_P]; 
     __shared__ int free_particle_counter;
 
     if (thr_id == 0)
     {
         free_particle_counter = 0;
     }
-    __syncthreads;
+    __syncthreads();
 
 
-    // loop to read the event
-    // check iterator
+    // loop to read the event 
+    // each event in parallel: each block is writing into cluster trace and getting data
+    // each block is also writing into shared memory
     for (int p = thr_id; p < MAX_P; p += block_dim)
     {
 
@@ -84,7 +96,7 @@ __global__ void processEvent(
 
             dB_s[p] = 1.0/(p_t*p_t);
 
-            // avoiding data race to update the number of particle of the event
+            // avoiding data race to update the number of particle of the event with atomicAdd
             int free_particle_id = atomicAdd(&free_particle_counter, 1);
 
             // fill array to keep track of the particles
@@ -95,13 +107,13 @@ __global__ void processEvent(
     }
 
     // wait for all the threads to finish
-    __syncthreads;
+    __syncthreads();
 
     // to handle minima 
     // shared memory to keep results of all threads working on different particles over the event
     // a kernel can have only one dynamically allocated shared array
     // so we have to manually partition a big array
-    extern __shared__ char dyn[]; // extern specifier to declare a variable that will be allocated at kernel launch --> WHY CHAR??
+    extern __shared__ char dyn[]; // extern specifier to declare a variable that will be allocated at kernel launch 
     double *s_d_ij = (double*) dyn;
     int *s_idx_i = (int*)(s_d_ij + block_dim);
     int *s_idx_j = (int*)(s_idx_i + block_dim); 
@@ -117,19 +129,17 @@ __global__ void processEvent(
         {
             if (thr_id == 0)
             {
-                // TO DO (?)
-
                 free_particle_counter--;
             }
-            __syncthreads;
+            __syncthreads();
             continue;
             
         }
 
-        // define minima for this iteration
+        // define minima for this iteration (private to each thread)
         double min_d_ij = D;
         int min_idx_i = -1;
-        int min_ixd_j = -1;
+        int min_idx_j = -1;
 
         double min_d_iB = D;
         int min_idx_iB = -1;
@@ -141,7 +151,7 @@ __global__ void processEvent(
             int free_particle_i = free_p_s[i];
 
             // beam distance
-            double dB = s_d_iB[free_particle_i];
+            double dB = dB_s[free_particle_i];
             if (dB < min_d_iB)
             {
                 min_d_iB = dB;
@@ -149,7 +159,7 @@ __global__ void processEvent(
             }
 
             // particle distance
-            for (int j = i+1; i < free_particle_counter; ++j)
+            for (int j = i+1; j < free_particle_counter; ++j)
             {
                 int free_particle_j = free_p_s[j];
 
@@ -159,7 +169,7 @@ __global__ void processEvent(
                 double deltaR2 = eta_diff*eta_diff + phi_diff*phi_diff;
                 double factR = deltaR2/(R*R);
 
-                double p2 = fmin(dB, s_d_iB[free_particle_j]);
+                double p2 = fmin(dB, dB_s[free_particle_j]);
 
                 double current_dist_ij = p2*factR;
 
@@ -167,17 +177,17 @@ __global__ void processEvent(
                 {
                     min_d_ij = current_dist_ij;
                     min_idx_i = i;
-                    min_ixd_j = j;
+                    min_idx_j = j;
                 }
                 
             }
             
-        }
+        } // end of computing distance loop
         
         // track each minima found by each thread
         s_d_ij[thr_id] = min_d_ij;
         s_idx_i[thr_id] = min_idx_i;
-        s_idx_j[thr_id] = min_ixd_j;
+        s_idx_j[thr_id] = min_idx_j;
 
         s_d_iB[thr_id] = min_d_iB;
         s_idx_iB[thr_id] = min_idx_iB;
@@ -185,11 +195,13 @@ __global__ void processEvent(
         __syncthreads();
 
         // reduction to find minima
+        // sequential addressing assuming block_dim is a power of 2
         // k >>= 1 means shift bits to the right (divide by 2)
         for (int k = block_dim/2; k > 0; k >>= 1)
         {
             if (thr_id < k)
             {
+                // distances between particles
                 if (s_d_ij[thr_id+k] < s_d_ij[thr_id])
                 {
                     s_d_ij[thr_id] = s_d_ij[thr_id+k];
@@ -198,6 +210,7 @@ __global__ void processEvent(
                     s_idx_j[thr_id] = s_idx_j[thr_id+k];
                 }
 
+                // distances from beam
                 if (s_d_iB[thr_id+k] < s_d_iB[thr_id])
                 {
                     s_d_iB[thr_id] = s_d_iB[thr_id+k];
@@ -207,12 +220,63 @@ __global__ void processEvent(
                 
             }
             
-        }
+        } // end of reduction loop
 
         __syncthreads();
         
         // merging
+        if (thr_id == 0)
+        {
+            // retrieve minima from reduction
+            double found_min_ij = s_d_ij[0];
+            double found_min_iB = s_d_iB[0];
+
+            if (found_min_iB < found_min_ij) // CASE I: jet found
+            {
+                int found_idx_B = s_idx_iB[0];
+
+                // the particle is not free anymore, remove its index from free particle ID array
+                free_p_s[found_idx_B] = free_p_s[free_particle_counter - 1];
+
+                free_particle_counter--;
+            }
+            else // CASE II: merging particles/pseudoclusters
+            {
+                int found_idx_i = s_idx_i[0];
+                int found_idx_j = s_idx_j[0];
+
+                int particle_i_id = free_p_s[found_idx_i];
+                int particle_j_id = free_p_s[found_idx_j];
+
+                // update kinematics
+                double particle_i_pt = pt_s[particle_i_id];
+                double particle_j_pt = pt_s[particle_j_id];
+
+                double new_pt = particle_i_pt + particle_j_pt;
+
+                pt_s[particle_i_id] = new_pt;
+                eta_s[particle_i_id] = (particle_i_pt * eta_s[particle_i_id] + particle_j_pt * eta_s[particle_j_id]) / new_pt;
+                phi_s[particle_i_id] = (particle_i_pt * phi_s[particle_i_id] + particle_j_pt * phi_s[particle_j_id]) / new_pt;
+                dB_s[particle_i_id] = 1./(new_pt*new_pt);
+
+                // update cluster trace
+                clusters_trace[particle_offset + particle_j_id] = particle_i_id; 
+
+                // update free particles array and counter
+                free_p_s[found_idx_j] = free_p_s[free_particle_counter-1];
+                free_particle_counter--;
+
+            }
+            
+        } // end of merging phase
+    
+        __syncthreads();    
         
+    } // end of while loop
+
+    if (thr_id == 0)
+    {
+        times[ev] = clock() - start_event;
     }
     
 }
