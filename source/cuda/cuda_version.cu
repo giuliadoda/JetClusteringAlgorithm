@@ -11,11 +11,20 @@
 #include "utils.h"  
 #include "functions.cuh"
 
-// add CUDA error checking
+// CUDA error checking
+#define CUDA_CHECK(call)                                                     
+    do {                                                                     
+        cudaError_t err = (call);                                            
+        if (err != cudaSuccess) {                                            
+            fprintf(stderr, "CUDA error at %s:%d: %s\n",                     
+                    __FILE__, __LINE__, cudaGetErrorString(err));            
+            exit(EXIT_FAILURE);                                              
+        }                                                                    
+    } while (0)
 
 int main() {
 
-    // execution time --> am I getting this right?
+    // execution time (CPU)
     clock_t start_t, end_t;
     double exec_time;
 
@@ -43,6 +52,7 @@ int main() {
     if (dset_id < 0)
     {
         fprintf(stderr, "Cannot get dataset\n");
+        H5Fclose(file_id);
         return EXIT_FAILURE;
     }
     
@@ -52,18 +62,20 @@ int main() {
     if (space_id < 0)
     {
         fprintf(stderr, "Cannot get dataspace\n");
+        H5Dclose(dset_id);
+        H5Fclose(file_id);
         return EXIT_FAILURE;
     }
 
     // check dataset dimensions
 
-    hsize_t dataset_dims[2];
+    hsize_t dataset_dims[DIM];
 
     H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
     
     // read dataset (only the selected number of events)
-    int start_row = 0;
-    int start_col = 0;
+    hsize_t start_row = 0;
+    hsize_t start_col = 0;
     hsize_t n_read = N_EVENTS;
     hsize_t offset[DIM] = {start_row, start_col};         // starting row and column
     hsize_t count[DIM]  = {n_read, N_COLS};    // ending point
@@ -88,6 +100,9 @@ int main() {
     if (memspace < 0)
     {
         fprintf(stderr, "Cannot create dataspace\n");
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(file_id);
         return EXIT_FAILURE;
     }
 
@@ -97,7 +112,11 @@ int main() {
     // check if the allocation happened properly
     if (data == NULL) {
         fprintf(stderr, "Failed to allocate data buffer\n");
-        exit(1);
+        H5Sclose(memspace);
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(file_id);
+        return EXIT_FAILURE;
     }
 
     // read data 
@@ -113,6 +132,11 @@ int main() {
     if (read_id < 0)
     {
         fprintf(stderr, "Cannot read data\n");
+        free(data);
+        H5Sclose(memspace);
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(file_id);
         return EXIT_FAILURE;
     }
     
@@ -127,6 +151,101 @@ int main() {
     if (fout < 0)
     {
         fprintf(stderr, "Cannot create output file\n");
+        free(data);
+        H5Sclose(memspace);
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(file_id);
+        return EXIT_FAILURE;
+    }
+
+    hsize_t out_dims[DIM] = {n_read, MAX_P};
+
+    hid_t space_out = H5Screate_simple(
+        DIM,
+        out_dims,
+        NULL
+    );
+
+    if (space_out < 0)
+    {
+        fprintf(stderr, "Cannot create output dataspace\n");
+        free(data);
+        H5Sclose(memspace);
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(fout);
+        H5Fclose(file_id);
+        return EXIT_FAILURE;
+    }
+
+    hid_t dset_out = H5Dcreate2(
+        fout,
+        "/cluster_trace",
+        H5T_NATIVE_INT,
+        space_out,
+        H5P_DEFAULT,
+        H5P_DEFAULT,
+        H5P_DEFAULT
+    );
+    
+    if (dset_out < 0)
+    {
+        fprintf(stderr, "Cannot create output dataset\n");
+        free(data);
+        H5Sclose(space_out);
+        H5Sclose(memspace);
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(fout);
+        H5Fclose(file_id);
+        return EXIT_FAILURE;
+    }
+
+    hsize_t time_dims[1] = {n_read};
+
+    hid_t time_space = H5Screate_simple(
+        1,
+        time_dims,
+        NULL
+    );
+
+    if (time_space < 0)
+    {
+        fprintf(stderr, "Cannot create output time space\n");
+        free(data);
+        H5Dclose(dset_out);
+        H5Sclose(space_out);
+        H5Sclose(memspace);
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(fout);
+        H5Fclose(file_id);
+        return EXIT_FAILURE;
+    }
+
+    hid_t time_dset = H5Dcreate2(
+        fout,
+        "/event_times",
+        H5T_NATIVE_FLOAT,
+        time_space, 
+        H5P_DEFAULT,
+        H5P_DEFAULT,
+        H5P_DEFAULT
+    );
+
+    if (time_dset < 0)
+    {
+        fprintf(stderr, "Cannot create output time dataset\n");
+        free(data);
+        H5Sclose(time_space);
+        H5Dclose(dset_out);
+        H5Sclose(space_out);
+        H5Sclose(memspace);
+        H5Sclose(space_id);
+        H5Dclose(dset_id);
+        H5Fclose(fout);
+        H5Fclose(file_id);
         return EXIT_FAILURE;
     }
 
@@ -138,26 +257,42 @@ int main() {
 
     // allocate memory on GPU
     double *dev_data;
-    int data_size = n_read * N_COLS * sizeof(double);
-    cudaMalloc((void**)&dev_data, data_size);
+    size_t data_size = n_read * N_COLS * sizeof(double);
+    CUDA_CHECK(cudaMalloc((void**)&dev_data, data_size));
 
     int *dev_cluster_trace;
-    int cluster_trace_size = N_EVENTS * MAX_P * sizeof(int);
-    cudaMalloc((void**)&dev_cluster_trace, cluster_trace_size);
+    size_t cluster_trace_size = N_EVENTS * MAX_P * sizeof(int);
+    CUDA_CHECK(cudaMalloc((void**)&dev_cluster_trace, cluster_trace_size));
 
     float *dev_times; // pointer to GPU memory for times array
-    int times_size = N_EVENTS * sizeof(float);
-    cudaMalloc((void **)&dev_times, times_size);
+    size_t times_size = N_EVENTS * sizeof(float);
+    CUDA_CHECK(cudaMalloc((void **)&dev_times, times_size));
 
     // copy data from host to device
     cudaMemcpy(dev_data, data, data_size, cudaMemcpyHostToDevice);
 
     // define number of blocks and threads per blocks
     int N_blocks = N_EVENTS;
-    int N_thr_bl = MAX_P;
+    int N_thr_bl = 512;
 
     // calculate amount of dynamic shared memory needed 
-    size_t shared_mem_size = N_thr_bl * (2*sizeof(double) + 3*sizeof(int));
+    size_t shared_mem_size = (size_t)N_thr_bl * (2*sizeof(double) + 3*sizeof(int));
+
+    // check if shared memory is enough
+    int device;
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDevice(&device));
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
+    
+    cudaFuncAttributes attr;
+    cudaFuncGetAttributes(&attr, processEvent);
+    size_t total_shared = attr.sharedSizeBytes + shared_mem_size; // including also dynamic memory
+
+    if (total_shared > prop.sharedMemPerBlock) {
+        fprintf(stderr, "Requested shared memory %zu bytes exceeds device max of %zu bytes\n",
+                total_shared, prop.sharedMemPerBlock);
+        exit(EXIT_FAILURE);
+    }
 
     // kernel launch
     cudaEventRecord(start);
@@ -176,7 +311,24 @@ int main() {
     cudaMemcpy(times, dev_times, times_size, cudaMemcpyDeviceToHost);
 
     // save clustering results
-    // TO DO
+    H5Dwrite(
+        dset_out,
+        H5T_NATIVE_INT,
+        H5S_ALL,
+        H5S_ALL,
+        H5P_DEFAULT,
+        cluster_trace
+    );
+
+    // save times per event
+    H5Dwrite(
+        time_dset,
+        H5T_NATIVE_FLOAT,
+        H5S_ALL,
+        H5S_ALL,
+        H5P_DEFAULT,
+        times
+    );
 
     // free memory and close file
     free(data);
@@ -189,6 +341,12 @@ int main() {
     cudaFree(dev_data);
     cudaFree(dev_cluster_trace);
     cudaFree(dev_times);
+
+    H5Dclose(time_dset);
+    H5Sclose(time_space);
+
+    H5Dclose(dset_out);
+    H5Sclose(space_out);
 
     H5Sclose(memspace); 
     H5Sclose(space_id);
@@ -204,6 +362,17 @@ int main() {
     // save event execution times
 
     printf("\nExecution time (total, %d events): %f (sec)\n\n", N_EVENTS, exec_time);
+
+    printf("\nKernel execution time: %.3f ms\n", kernel_ms);
+
+    double avg = 0.0;
+
+    for(int i=0;i<N_EVENTS;i++)
+        avg += times[i];
+
+    avg /= N_EVENTS;
+
+    printf("\nAverage event time: %.6f ms\n", avg);
 
     return 0;
 
