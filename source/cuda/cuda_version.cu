@@ -1,4 +1,4 @@
-// strategy: each event per block 
+// parallelizing strategy: each event per block 
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,32 +8,28 @@
 #include <hdf5.h>           
 
 #include "constants.h" 
-#include "utils.h"  
+#include "utils.cuh"
 #include "functions.cuh"
 
-// CUDA error checking
-#define CUDA_CHECK(call)                                                     
-    do {                                                                     
-        cudaError_t err = (call);                                            
-        if (err != cudaSuccess) {                                            
-            fprintf(stderr, "CUDA error at %s:%d: %s\n",                     
-                    __FILE__, __LINE__, cudaGetErrorString(err));            
-            exit(EXIT_FAILURE);                                              
-        }                                                                    
-    } while (0)
+#define THR_BLOCK 256 // 16, 32, 64, 128, 256, 512
 
+// ---------- MAIN ----------
 int main() {
 
     // execution time (CPU)
-    clock_t start_t, end_t;
-    double exec_time;
-
-    start_t = clock();
+    struct timespec t_start, t_end;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
 
     // CUDA timers
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    cudaEvent_t start_h2d, stop_h2d;        // data transfer host to device
+    cudaEvent_t start_kernel, stop_kernel;  // kernel
+    cudaEvent_t start_d2h, stop_d2h;        // data transfer device to host
+    CUDA_CHECK(cudaEventCreate(&start_h2d));
+    CUDA_CHECK(cudaEventCreate(&stop_h2d));
+    CUDA_CHECK(cudaEventCreate(&start_kernel));
+    CUDA_CHECK(cudaEventCreate(&stop_kernel));
+    CUDA_CHECK(cudaEventCreate(&start_d2h));
+    CUDA_CHECK(cudaEventCreate(&stop_d2h));
 
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
@@ -74,9 +70,9 @@ int main() {
     H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
     
     // read dataset (only the selected number of events)
-    hsize_t start_row = 0;
-    hsize_t start_col = 0;
-    hsize_t n_read = N_EVENTS;
+    int start_row = 0;
+    int start_col = 0;
+    int n_read = N_EVENTS;
     hsize_t offset[DIM] = {start_row, start_col};         // starting row and column
     hsize_t count[DIM]  = {n_read, N_COLS};    // ending point
 
@@ -107,7 +103,7 @@ int main() {
     }
 
     // allocate memory
-    double *data = malloc(n_read * N_COLS * sizeof(double));
+    double *data = (double *)malloc(n_read * N_COLS * sizeof(double));
 
     // check if the allocation happened properly
     if (data == NULL) {
@@ -250,10 +246,10 @@ int main() {
     }
 
     // array to store elapsed time for each event, to be passed to GPU
-    float *times = malloc(N_EVENTS * sizeof(float));
+    float *times = (float *)malloc(n_read * sizeof(float));
 
     // array to store cluster trace
-    int *cluster_trace = malloc(N_EVENTS*MAX_P*sizeof(int));
+    int *cluster_trace = (int *)malloc(n_read*MAX_P*sizeof(int));
 
     // allocate memory on GPU
     double *dev_data;
@@ -261,19 +257,16 @@ int main() {
     CUDA_CHECK(cudaMalloc((void**)&dev_data, data_size));
 
     int *dev_cluster_trace;
-    size_t cluster_trace_size = N_EVENTS * MAX_P * sizeof(int);
+    size_t cluster_trace_size = n_read * MAX_P * sizeof(int);
     CUDA_CHECK(cudaMalloc((void**)&dev_cluster_trace, cluster_trace_size));
 
     float *dev_times; // pointer to GPU memory for times array
-    size_t times_size = N_EVENTS * sizeof(float);
+    size_t times_size = n_read * sizeof(float);
     CUDA_CHECK(cudaMalloc((void **)&dev_times, times_size));
 
-    // copy data from host to device
-    cudaMemcpy(dev_data, data, data_size, cudaMemcpyHostToDevice);
-
     // define number of blocks and threads per blocks
-    int N_blocks = N_EVENTS;
-    int N_thr_bl = 512;
+    int N_blocks = n_read;
+    int N_thr_bl = THR_BLOCK;
 
     // calculate amount of dynamic shared memory needed 
     size_t shared_mem_size = (size_t)N_thr_bl * (2*sizeof(double) + 3*sizeof(int));
@@ -294,24 +287,37 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+    // host to device data transfer
+    CUDA_CHECK(cudaEventRecord(start_h2d));
+    CUDA_CHECK(cudaMemcpy(dev_data, data, data_size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaEventRecord(stop_h2d));
+    CUDA_CHECK(cudaEventSynchronize(stop_h2d));
+
     // kernel launch
-    cudaEventRecord(start);
+    CUDA_CHECK(cudaEventRecord(start_kernel));      
 
     processEvent<<<N_blocks, N_thr_bl, shared_mem_size>>>(dev_data, dev_cluster_trace, dev_times);
 
-    cudaGetLastError();
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
+    CUDA_CHECK(cudaEventRecord(stop_kernel));
+    CUDA_CHECK(cudaEventSynchronize(stop_kernel));
 
-    float kernel_ms = 0;
-    cudaEventElapsedTime(&kernel_ms, start, stop);
+    // device to host data transfer
+    CUDA_CHECK(cudaEventRecord(start_d2h));
+    CUDA_CHECK(cudaMemcpy(cluster_trace, dev_cluster_trace, cluster_trace_size, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(times, dev_times, times_size, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaEventRecord(stop_d2h));
+    CUDA_CHECK(cudaEventSynchronize(stop_d2h));
 
-    cudaMemcpy(cluster_trace, dev_cluster_trace, cluster_trace_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(times, dev_times, times_size, cudaMemcpyDeviceToHost);
+    float h2d_ms = 0, kernel_ms = 0, d2h_ms = 0;
+    cudaEventElapsedTime(&h2d_ms, start_h2d, stop_h2d);
+    cudaEventElapsedTime(&kernel_ms, start_kernel, stop_kernel);
+    cudaEventElapsedTime(&d2h_ms, start_d2h, stop_d2h);
 
     // save clustering results
-    H5Dwrite(
+    herr_t write_status = H5Dwrite(
         dset_out,
         H5T_NATIVE_INT,
         H5S_ALL,
@@ -320,8 +326,12 @@ int main() {
         cluster_trace
     );
 
+    if (write_status < 0) {
+        fprintf(stderr, "Cannot write cluster_trace dataset\n");
+    }
+
     // save times per event
-    H5Dwrite(
+    write_status = H5Dwrite(
         time_dset,
         H5T_NATIVE_FLOAT,
         H5S_ALL,
@@ -330,13 +340,48 @@ int main() {
         times
     );
 
+    if (write_status < 0) {
+        fprintf(stderr, "Cannot write event_times dataset\n");
+    }
+
+    // execution times
+    clock_gettime(CLOCK_MONOTONIC, &t_end);
+    double exec_time = (t_end.tv_sec - t_start.tv_sec) + (t_end.tv_nsec - t_start.tv_nsec) / 1e9;
+
+    printf("\nExecution time (total wall-clock, %d events): %f (sec)\n\n", n_read, exec_time);
+    printf("H2D copy time: %.3f ms\n", h2d_ms);
+    printf("Kernel time: %.3f ms\n", kernel_ms);
+    printf("D2H copy time: %.3f ms\n", d2h_ms);
+
+    // convert GPU times to sec (with GPU clock rate)
+    float cycles_to_ms = 1. / (float)prop.clockRate;
+    double avg = 0.0;
+    for (int i = 0; i < n_read; i++)
+    {
+        double t = times[i] * cycles_to_ms;
+        if (t < 0)
+        {
+            printf("\nTime from GPU for event %d (ms): %f", i, t);
+        }
+        avg += t;
+
+    }
+
+    avg /= n_read;
+
+    printf("\nAverage event time: %.6f ms\n", avg);
+
     // free memory and close file
     free(data);
     free(times);
     free(cluster_trace);
 
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    cudaEventDestroy(start_h2d);
+    cudaEventDestroy(stop_h2d);
+    cudaEventDestroy(start_kernel);
+    cudaEventDestroy(stop_kernel);
+    cudaEventDestroy(start_d2h);
+    cudaEventDestroy(stop_d2h);
 
     cudaFree(dev_data);
     cudaFree(dev_cluster_trace);
@@ -354,25 +399,6 @@ int main() {
 
     H5Fclose(fout);
     H5Fclose(file_id);
-
-    end_t = clock();
-
-    exec_time = (double) (end_t - start_t)/CLOCKS_PER_SEC; 
-
-    // save event execution times
-
-    printf("\nExecution time (total, %d events): %f (sec)\n\n", N_EVENTS, exec_time);
-
-    printf("\nKernel execution time: %.3f ms\n", kernel_ms);
-
-    double avg = 0.0;
-
-    for(int i=0;i<N_EVENTS;i++)
-        avg += times[i];
-
-    avg /= N_EVENTS;
-
-    printf("\nAverage event time: %.6f ms\n", avg);
 
     return 0;
 

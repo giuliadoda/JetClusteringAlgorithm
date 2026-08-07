@@ -4,7 +4,6 @@
 #include <math.h> 
 
 #include "constants.h" 
-#include "utils.h" 
 #include "functions.cuh" 
 
 
@@ -48,11 +47,11 @@ __global__ void processEvent(
     int event_offset = ev * N_COLS; // to navigate data
     int particle_offset = ev * MAX_P; 
 
-    // per-event timing (managed by thread 0)
+    // per-event timing (managed by thread 0, each event is managed by a block that will stay to the SMP for its lifetime)
     int start_event = 0;
     if (thr_id == 0)
     {
-        start_event = clock();
+        start_event = clock64();
     }
 
     __syncthreads();
@@ -102,7 +101,12 @@ __global__ void processEvent(
             // fill array to keep track of the particles
             free_p_s[free_particle_id] = p;
 
-         }
+        }
+        else
+        {
+            break;
+        }
+        
         
     }
 
@@ -219,10 +223,11 @@ __global__ void processEvent(
                 }
                 
             }
+
+            // wait for all the threads to write before next reduction step
+            __syncthreads(); 
             
         } // end of reduction loop
-
-        __syncthreads();
         
         // merging
         if (thr_id == 0)
@@ -276,7 +281,7 @@ __global__ void processEvent(
 
     if (thr_id == 0)
     {
-        times[ev] = clock() - start_event;
+        times[ev] = (float)(clock64() - start_event);
     }
     
 }
