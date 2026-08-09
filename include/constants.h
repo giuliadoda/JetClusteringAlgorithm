@@ -6,7 +6,9 @@
 #define N_COLS (MAX_P * N_FEAT)
 #define DIM 2
 
-#define N_EVENTS 100000         // 100000
+#ifndef N_EVENTS
+#define N_EVENTS 100000         
+#endif
 
 #define R 0.4
 #define D 1000.                 // sufficiently large

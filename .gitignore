@@ -6,3 +6,4 @@ plots/figures
 benchmarks
 *.txt
 info_GPU
+*.log

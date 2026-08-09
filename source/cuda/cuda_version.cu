@@ -11,7 +11,11 @@
 #include "utils.cuh"
 #include "functions.cuh"
 
+
+#ifndef THR_BLOCK
 #define THR_BLOCK 256 // 16, 32, 64, 128, 256, 512
+#endif
+
 
 // ---------- MAIN ----------
 int main() {

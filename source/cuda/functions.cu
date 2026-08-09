@@ -24,7 +24,7 @@ __device__ __forceinline__ double deltaPhi(double phi_i, double phi_j) {
 
 
 // main kernel (one CUDA block processes an event)
-// cluster_trace for each event is something like: [0, 0, 5, 3, 3, 7, ...] meaning that particles 1 has been merged into particle 0, particle 2 into particle 5, particle 4 into 3, 5 into 7, ...
+// cluster_trace for each event is something like: [0, 0, 5, 7, 3, 7, ...] meaning that particles 1 has been merged into particle 0, particle 2 into particle 5, particle 3 into particle 7, particle 4 into 3 (and then both of them into 7), 5 into 7, ...
 // __restrict__ to avoid pointer aliasing (make sure arrays won't overlap, knowing this info at compile time can improve performance 2x)
 __global__ void processEvent(
     const double* __restrict__ data,

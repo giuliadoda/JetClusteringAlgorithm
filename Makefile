@@ -1,7 +1,8 @@
 # USAGE :))
 # make openmp          			# compile ALL openmp versions 
 # make bin/openmp_version1   	# compile only specific openmp version
-# make all             			# serial + all openmp
+# make all             			# serial + all openmp 
+# make cuda EXTRA_DEFS="-DTHR_BLOCK=128 -DN_EVENTS=5000"	# CUDA, make clean before each CUDA compilation
 
 # =========================
 # Compiler
@@ -107,7 +108,8 @@ CUDA_SRC = \
 
 CUDA_OBJ = $(CUDA_SRC:%.cu=$(BUILD_DIR)/%.o)
 
-NVFLAGS = -O0 -MMD -MP
+EXTRA_DEFS ?=
+NVFLAGS = -O0 -MMD -MP $(EXTRA_DEFS)
 
 $(CUDA_OBJ): INCLUDES += $(CU_INCLUDES)
 
