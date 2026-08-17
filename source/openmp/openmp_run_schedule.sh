@@ -1,26 +1,16 @@
 #!/bin/bash
-#
-# Runs the OpenMP binary with different OMP_SCHEDULE settings and thread
-# counts, and collects the total execution time into a CSV. Each run also
-# gets its own HDF5 output file (via argv[1] of the binary) so the
-# per-event `times` array saved by the C program is never overwritten by
-# the next run.
-#
-# NOTE: this script writes one row per run (raw data). It does NOT average
-# anything itself -- averaging/std-dev across the `run` column is left to
-# post-processing (see the pandas snippet at the bottom of this file).
-#
+
 # Usage:
 #   ./run_schedule.sh [path_to_binary] [num_runs_per_config]
 #
 # Example:
-#   ./run_schedule.sh /mnt/POD/MCP_GD/JetClusteringAlgorithm/bin/openmp_version_base_schedule 5
+#   ./run_schedule.sh /mnt/POD/MCP_GD/JetClusteringAlgorithm/bin/openmp_version 5
 #
 
 set -euo pipefail
 
 BINARY="${1:-./bin/openmp_version}"
-RUNS="${2:-1}"                     # how many repetitions per configuration (for averaging later)
+RUNS="${2:-1}"                     
 OUTPUT_CSV="/mnt/POD/MCP_GD/JetClusteringAlgorithm/benchmarks/benchmark_results_openmp_schedules_threads.csv"
 OUTPUT_H5_DIR="/mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/openmp/benchmark_runs"
 
@@ -105,15 +95,3 @@ done
 echo ""
 echo "Done. Raw per-run results saved to $OUTPUT_CSV"
 echo "Per-run times[] arrays saved under $OUTPUT_H5_DIR (dataset /times in each .h5 file)"
-
-# ---------------------------------------------------------------------------
-# Post-processing (run separately, not part of this script):
-#
-#   import pandas as pd
-#   df = pd.read_csv("benchmark_results_openmp_schedules_threads.csv")
-#   summary = (
-#       df.groupby(["schedule", "chunk", "threads"])["time_sec"]
-#         .agg(["mean", "std", "count"])
-#   )
-#   print(summary)
-# ---------------------------------------------------------------------------

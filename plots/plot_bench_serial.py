@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 ROOT_DIR = '/mnt/POD/MCP_GD/JetClusteringAlgorithm/'
-FIGURES_DIR = ROOT_DIR + 'plots/figures/'
+FIGURES_DIR = ROOT_DIR + 'plots/figures/benchmarks/serial/'
 BENCH_DIR = ROOT_DIR + 'benchmarks/'
 
 PER_EVENT_FILE = BENCH_DIR + 'serial_per_event_timings.csv'
@@ -54,7 +54,7 @@ if __name__ == "__main__":
         ax.errorbar(n_events, y, yerr = y_err, ecolor = colors[i], capsize = 0.5)
 
     ax.legend()
-    ax.set_ylabel('Average execution time (min)')
+    ax.set_ylabel('Average execution time (s)')
     ax.set_xlabel('# Events')
     ax.set_xscale('log')
     ax.set_yscale('log')
