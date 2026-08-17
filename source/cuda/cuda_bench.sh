@@ -42,7 +42,7 @@ for THR in "${THR_BLOCK_VALUES[@]}"; do
         combo_idx=$((combo_idx + 1))
         echo "=== [${combo_idx}/${total_combos}] THR_BLOCK=${THR}  N_EVENTS=${NEV} ==="
 
-        # cleaning previosu config
+        # cleaning previous config
         make clean > /dev/null
 
         if ! make cuda EXTRA_DEFS="-DTHR_BLOCK=${THR} -DN_EVENTS=${NEV}" > build.log 2>&1; then

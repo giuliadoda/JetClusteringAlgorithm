@@ -86,17 +86,10 @@ static double compute_distance_ij(Event *ev, int i, int j) {
 
     double factR = deltaR2/(R*R);
 
-    double p2;
-
     double p_i2 = particle_i->d_B; // maybe it's better to compute them again on the fly instead of access the memory (?)
     double p_j2 = particle_j->d_B;
 
-    if ( p_i2 > p_j2)
-    {
-        p2 = p_j2;
-    } else {
-        p2 = p_i2;
-    }
+    double p2 = fmin(p_i2, p_j2);
     
     double distance = p2 * factR;
 
@@ -380,7 +373,7 @@ static herr_t save_event(hid_t fout, Event *event) {
 }
 
 // function to loop over events 
-void process_event(double *data, Event *event, double *times, hid_t fout) {
+void process_event(double *data, Event *event, double *times, int *nparticles, hid_t fout) {
 
     // loop over events
     for (int ev = 0; ev < N_EVENTS; ++ev) {
@@ -499,6 +492,8 @@ void process_event(double *data, Event *event, double *times, hid_t fout) {
         t_event = (double) (end_t_ev - start_t_ev)/CLOCKS_PER_SEC;
 
         times[ev] = t_event;
+
+        nparticles[ev] = n_part;
 
         // printf("Event %d execution time: %f\n", ev, t_event);
 

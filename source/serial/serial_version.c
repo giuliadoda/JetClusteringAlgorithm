@@ -20,7 +20,7 @@ int main() {
 
     start_t = clock();
 
-    printf("Getting data ... \n");
+    // printf("Getting data ... \n");
 
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
@@ -57,7 +57,7 @@ int main() {
 
     H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
 
-    printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
+    // printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
     
     // read dataset (only the selected number of events)
     int start_row = 0;
@@ -89,7 +89,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    printf("Allocating memory for data ...\n");
+    // printf("Allocating memory for data ...\n");
 
     // allocate memory
     double *data = malloc(n_read * N_COLS * sizeof(double));
@@ -116,11 +116,11 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    printf("Creating output file ... \n");
+    // printf("Creating output file ... \n");
     
     // output file
     hid_t fout = H5Fcreate(
-        "mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/serial/clusters.h5",
+        "/mnt/POD/MCP_GD/JetClusteringAlgorithm/data/results/serial/clusters.h5",
         H5F_ACC_TRUNC,  // file access flag: if the file already exists, erase all data previously stored
         H5P_DEFAULT,    // file creation property list identifier
         H5P_DEFAULT     // file access property list identifier
@@ -135,21 +135,30 @@ int main() {
     // array to store elapsed time for each event
     double times[N_EVENTS];
 
+    // array to store number of particles for each event
+    int part_per_event[N_EVENTS];
+
     // declare Event
     static Event event;
 
-    printf("Starting loop over events ...\n");
+    // printf("Starting loop over events ...\n");
 
     // loop over events 
-    process_event(data, &event, times, fout);
+    process_event(data, &event, times, part_per_event, fout);
 
-    printf("\nLoop over events finished.\n");
+    // printf("\nLoop over events finished.\n");
 
     // just read elapsed processing time for each event --> to be saved and compared
     // for (int id = 0; id < N_EVENTS; ++id)
     // {
     //     printf("Event ID %d elapsed time (s) %f", id, times[id]);
     // }
+
+    for (int id = 0; id < N_EVENTS; ++id) {
+
+        printf("EVENT,%d,%d,%.6f\n", id, part_per_event[id], times[id]);
+
+    }
 
     // free memory and close file
     free(data);

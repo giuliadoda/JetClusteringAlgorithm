@@ -1,88 +1,84 @@
-#!/usr/bin/env python3
-"""
-Plot: tempo di esecuzione per evento vs numero di particelle nell'evento,
-per la versione seriale del clustering.
-
-Legge il CSV prodotto da functions.c (colonne: event_id,n_particles,time_sec)
-e produce:
-  - uno scatter plot (tempo vs n_particelle)
-  - un plot con la media del tempo raggruppata per numero di particelle,
-    utile per vedere l'andamento medio (es. se e' O(n^2) o O(n^3))
-
-USO:
-    python3 plot_time_vs_particles.py results/serial_time_vs_particles.csv
-"""
-
-import sys
-import csv
-from collections import defaultdict
-
+import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+
+ROOT_DIR = '/mnt/POD/MCP_GD/JetClusteringAlgorithm/'
+FIGURES_DIR = ROOT_DIR + 'plots/figures/'
+BENCH_DIR = ROOT_DIR + 'benchmarks/'
+
+PER_EVENT_FILE = BENCH_DIR + 'serial_per_event_timings.csv'
+TIMING_FILE = BENCH_DIR + 'serial_timings.csv'
 
 
-def load_data(csv_path):
-    n_particles = []
-    times = []
+colors = [  "#58508d", # violet
+            "#bc5090", # purple
+            "#ff6361", # orange
+            "#ffa600"  # yellow
+        ]
 
-    with open(csv_path, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            n_particles.append(int(row["n_particles"]))
-            times.append(float(row["time_sec"]))
-
-    return n_particles, times
-
-
-def group_mean(n_particles, times):
-    """Raggruppa i tempi per numero di particelle e calcola la media."""
-    buckets = defaultdict(list)
-    for n, t in zip(n_particles, times):
-        buckets[n].append(t)
-
-    n_sorted = sorted(buckets.keys())
-    mean_times = [sum(buckets[n]) / len(buckets[n]) for n in n_sorted]
-
-    return n_sorted, mean_times
-
-
-def main():
-    if len(sys.argv) != 2:
-        print(f"Uso: {sys.argv[0]} <path_csv>")
-        sys.exit(1)
-
-    csv_path = sys.argv[1]
-    n_particles, times = load_data(csv_path)
-
-    if not n_particles:
-        print("Nessun dato trovato nel CSV.")
-        sys.exit(1)
-
-    n_grouped, t_mean = group_mean(n_particles, times)
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-    # scatter: un punto per evento
-    axes[0].scatter(n_particles, times, s=10, alpha=0.5)
-    axes[0].set_xlabel("Numero di particelle nell'evento")
-    axes[0].set_ylabel("Tempo di esecuzione (s)")
-    axes[0].set_title("Tempo per evento vs n. particelle")
-    axes[0].grid(True, alpha=0.3)
-
-    # media per numero di particelle
-    axes[1].plot(n_grouped, t_mean, marker="o", linestyle="-", markersize=4)
-    axes[1].set_xlabel("Numero di particelle nell'evento")
-    axes[1].set_ylabel("Tempo medio di esecuzione (s)")
-    axes[1].set_title("Tempo medio vs n. particelle")
-    axes[1].grid(True, alpha=0.3)
-
-    fig.tight_layout()
-
-    out_path = csv_path.rsplit(".", 1)[0] + "_plot.png"
-    fig.savefig(out_path, dpi=150)
-    print(f"Grafico salvato in: {out_path}")
-
-    plt.show()
+markers = ['o', 's', 'v', '^']
 
 
 if __name__ == "__main__":
-    main()
+
+    # read data
+    per_event_df = pd.read_csv(PER_EVENT_FILE)
+    timing_df = pd.read_csv(TIMING_FILE)
+
+    opt_levels = timing_df['opt_level'].unique()
+    n_events = np.sort(timing_df['n_events'].unique())
+    n_particles = np.sort(per_event_df['n_particles'].unique())
+
+    # averaging total execution time over runs at fixed number of events for each opt level
+    time_vs_events = timing_df.groupby(['opt_level', 'n_events']).agg(
+        avg_exec_time = ('time_sec', 'mean'),
+        std_exec_time = ('time_sec', 'std')
+    )
+
+    # averaging execution time per event (only for the maximum number of events)
+    time_per_event_vs_npart = per_event_df[per_event_df['n_events']==100000]
+    time_per_event_vs_npart = time_per_event_vs_npart.groupby(['opt_level', 'n_particles']).agg(avg_exec_time = ('time_sec', 'mean'), std_exec_time = ('time_sec', 'std'))
+
+    # PLOT I: total execution time vs number of events for each opt level
+    fig, ax = plt.subplots()
+    ax.grid(alpha = 0.4)
+
+    for i in range(len(opt_levels)):
+
+        df = time_vs_events[time_vs_events.index.get_level_values('opt_level') == opt_levels[i]].sort_index(level='n_events')
+
+        y = df['avg_exec_time']
+        y_err = df['std_exec_time']
+
+        ax.plot(n_events, y, color = colors[i], label = opt_levels[i], marker = markers[i])
+        ax.errorbar(n_events, y, yerr = y_err, ecolor = colors[i], capsize = 0.5)
+
+    ax.legend()
+    ax.set_ylabel('Average execution time (min)')
+    ax.set_xlabel('# Events')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+
+    plt.savefig(FIGURES_DIR+'time_vs_nevents.png', dpi = 300)
+
+
+    # PLOT II: execution time per event vs number of particles
+
+    fig, ax = plt.subplots()
+    ax.grid(alpha = 0.4)
+
+    for i in range(len(opt_levels)):
+
+        df = time_per_event_vs_npart[time_per_event_vs_npart.index.get_level_values('opt_level') == opt_levels[i]].sort_index(level='n_particles')
+
+        y = df['avg_exec_time']
+        y_err = df['std_exec_time']
+
+        ax.plot(n_particles, y, color = colors[i], marker = markers[i], label = opt_levels[i])
+        ax.errorbar(n_particles, y, yerr = y_err, ecolor = colors[i], capsize = 0.5)
+
+    ax.legend()
+    ax.set_ylabel('Average execution time per event (s)')
+    ax.set_xlabel('# Particles per event')
+
+    plt.savefig(FIGURES_DIR+'time_per_event_vs_npart.png', dpi = 300)

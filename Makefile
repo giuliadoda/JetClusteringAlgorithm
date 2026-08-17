@@ -15,7 +15,8 @@ NVCC = nvcc
 # Flags
 # =========================
 
-CFLAGS = -Wall -Wextra -O0 -MMD -MP
+OPT ?= -O0
+CFLAGS = -Wall -Wextra $(OPT) -MMD -MP
 OMP_FLAGS = -fopenmp
 
 # =========================
@@ -60,7 +61,7 @@ serial: $(BIN_DIR)/serial_version
 
 $(BIN_DIR)/serial_version: $(SERIAL_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(SERIAL_OBJ) -o $@ $(HDF5_LIBS)
+	$(CC) $(SERIAL_OBJ) -o $@ $(HDF5_LIBS) -lm
 
 
 # =========================
@@ -85,7 +86,7 @@ $(BUILD_DIR)/$(SRC_DIR)/openmp/$(1).o: CFLAGS   += $(OMP_FLAGS)
 
 $(BIN_DIR)/$(1): $(BUILD_DIR)/$(SRC_DIR)/openmp/$(1).o $(OMP_COMMON_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(OMP_FLAGS) $$^ -o $$@ $(HDF5_LIBS)
+	$(CC) $(OMP_FLAGS) $$^ -o $$@ $(HDF5_LIBS) -lm
 
 openmp: $(BIN_DIR)/$(1)
 
