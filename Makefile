@@ -69,7 +69,7 @@ $(BIN_DIR)/serial_version: $(SERIAL_OBJ)
 # =========================
 
 # list every openmp "main" version here (without .c)
-OMP_VERSIONS = openmp_version_base openmp_version_base_schedule
+OMP_VERSIONS = openmp_version
 
 # functions.c shared by all openmp versions
 OMP_COMMON_SRC = $(SRC_DIR)/openmp/functions.c

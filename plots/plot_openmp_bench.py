@@ -38,7 +38,7 @@ if __name__ == "__main__":
     ).reset_index()
 
     # PLOT I: time vs #threads per schedule with default chunks, speedup and efficiency
-    fig, ax = plt.subplots(nrows=1, ncols=3, figsize = (16,6))
+    fig, ax = plt.subplots(nrows=1, ncols=3, figsize = (18,6))
     ax = ax.flatten()
     ax_time = ax[0]
     ax_su = ax[1]
@@ -63,13 +63,13 @@ if __name__ == "__main__":
     # speedup
     ax_su.grid(alpha = 0.4)
 
-    t1 = np.array(default_chunk[default_chunk['threads']==threads[0]]['avg_exec_time'])
+    t1 = np.array(default_chunk[default_chunk['threads']==threads[0]]['avg_exec_time'])/60
 
     for i in range(len(schedules)):
 
         df = default_chunk[default_chunk['schedule']==schedules[i]].sort_index(level='threads')
 
-        y = df['avg_exec_time']/60
+        y = df['avg_exec_time']
         y = np.array(t1[i]/y)
 
         ax_su.plot((threads[0], threads[-1]), (y[0], y[0]*threads[-1]), color = 'grey', linestyle = '-.', alpha = 0.6)
@@ -79,6 +79,7 @@ if __name__ == "__main__":
     ax_su.set_ylabel('Speedup')
     ax_su.set_xlabel('# Threads')
     ax_su.set_xticks(threads)
+    ax_su.set_ylim(0, 0.15)
 
     # efficiency
     ax_ef.grid(alpha = 0.4)
@@ -97,7 +98,7 @@ if __name__ == "__main__":
     ax_ef.set_ylabel('Efficiency')
     ax_ef.set_xlabel('# Threads')
     ax_ef.set_xticks(threads)   
-    ax_ef.set_yticks(np.array([i+1 if i==0 else i*10 for i in range(9)]))
+    # ax_ef.set_yticks(np.array([i+1 if i==0 else i*10 for i in range(9)]))
 
     handles, labels = ax_ef.get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', ncols=4)
@@ -112,7 +113,7 @@ if __name__ == "__main__":
         ).reset_index()
 
     # PLOT II: time vs # threads per schedule with max #chunks, speedup and efficiency
-    fig, ax = plt.subplots(nrows = 1, ncols = 3, figsize=(16,6))
+    fig, ax = plt.subplots(nrows = 1, ncols = 3, figsize=(18,6))
     ax = ax.flatten()
     ax_time = ax[0]
     ax_su = ax[1]
@@ -137,13 +138,13 @@ if __name__ == "__main__":
     # speedup
     ax_su.grid(alpha = 0.4)
 
-    t1 = np.array(max_chunk[max_chunk['threads']==threads[0]]['avg_exec_time'])
+    t1 = np.array(max_chunk[max_chunk['threads']==threads[0]]['avg_exec_time'])/60
 
     for i in range(len(schedules)):
 
         df = max_chunk[max_chunk['schedule']==schedules[i]].sort_index(level='threads')
 
-        y = df['avg_exec_time']/60
+        y = df['avg_exec_time']
         y = np.array(t1[i]/y)
 
         ax_su.plot((threads[0], threads[-1]), (y[0], y[0]*threads[-1]), color = 'grey', linestyle = '-.', alpha = 0.6)
@@ -153,6 +154,7 @@ if __name__ == "__main__":
     ax_su.set_ylabel('Speedup')
     ax_su.set_xlabel('# Threads')
     ax_su.set_xticks(threads)
+    ax_su.set_ylim(0, 0.15)
 
     # efficiency
     ax_ef.grid(alpha = 0.4)
@@ -171,7 +173,7 @@ if __name__ == "__main__":
     ax_ef.set_ylabel('Efficiency')
     ax_ef.set_xlabel('# Threads')
     ax_ef.set_xticks(threads)   
-    ax_ef.set_yticks(np.array([i+1 if i==0 else i*10 for i in range(9)]))
+    # ax_ef.set_yticks(np.array([i+1 if i==0 else i*10 for i in range(9)]))
 
     handles, labels = ax_ef.get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', ncols=4)
@@ -199,14 +201,15 @@ if __name__ == "__main__":
         y = df['avg_exec_time']/60
         y_err = df['std_exec_time']/60
 
-        ax.plot(x, y, color=colors[i], linestyle = '--', label = schedules[i]+f', #thread = {bt}', marker = markers[i])
-        ax.errorbar(x, y, yerr=y_err, ecolor = colors[i], color = colors[i], capsize = 2.5, linestyle = '--')
+        # ax.plot(x, y, color=colors[i], linestyle = '--', label = schedules[i]+f', #thread = {bt}', marker = markers[i])
+        ax.scatter(x, y, color = colors[i], label = schedules[i]+f', #thread = {bt}', marker = markers[i])
+        ax.errorbar(x, y, yerr=y_err, ecolor = colors[i], color = colors[i], capsize = 2.5, lw=0, elinewidth=1)
 
     ax.set_ylabel('Average execution time (min)')
     ax.set_xlabel('# Chunks')
     ax.set_xticks(chunks)
 
-    ax.set_ylim(5.5,10)
+    ax.set_ylim(5.5,10.5)
     ax.set_yticks([6,7,8,9,10])
 
     ax.legend()
