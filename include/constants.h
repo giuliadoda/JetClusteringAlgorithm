@@ -7,7 +7,7 @@
 #define DIM 2
 
 #ifndef N_EVENTS
-#define N_EVENTS 50000
+#define N_EVENTS 100000         
 #endif
 
 #define R 0.4
