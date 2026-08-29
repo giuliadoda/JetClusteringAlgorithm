@@ -86,17 +86,10 @@ static double compute_distance_ij(Event *ev, int i, int j) {
 
     double factR = deltaR2/(R*R);
 
-    double p2;
-
     double p_i2 = particle_i->d_B; // maybe it's better to compute them again on the fly instead of access the memory (?)
     double p_j2 = particle_j->d_B;
 
-    if ( p_i2 > p_j2)
-    {
-        p2 = p_j2;
-    } else {
-        p2 = p_i2;
-    }
+    double p2 = fmin(p_i2, p_j2);
     
     double distance = p2 * factR;
 
@@ -378,14 +371,9 @@ static herr_t save_event(hid_t fout, Event *event) {
 }
 
 // function to loop over events 
-void process_single_event(double *data, int ev, double *times, hid_t fout) {
+void process_single_event(double *data, int ev, hid_t fout) {
 
     Event event;
-
-    // compute event time
-    double start_t_ev, end_t_ev, t_event; 
-
-    start_t_ev = omp_get_wtime();
 
     read_event(&data[ev*N_COLS], &event, ev); 
 
@@ -482,11 +470,5 @@ void process_single_event(double *data, int ev, double *times, hid_t fout) {
 
     // free event memory
     event_free(&event);
-
-    end_t_ev = omp_get_wtime();
-
-    t_event = end_t_ev - start_t_ev;
-
-    times[ev] = t_event;
 
 }

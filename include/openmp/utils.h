@@ -36,17 +36,4 @@ typedef struct Event {
 
 } Event;
 
-// struct to handle minimum distance
-typedef struct Minimum
-{
-    double distance;
-
-    // particle IDs
-    int id_i, id_j;
-
-    // particle indexes
-    int idx_i, idx_j;
-
-} Minimum;
-
 #endif

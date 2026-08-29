@@ -4,6 +4,6 @@
 #include "utils.h"  
 
 // function to loop over events 
-void process_single_event(double *data, int ev, double *times, hid_t fout);
+void process_single_event(double *data, int ev, hid_t fout);
 
 #endif

@@ -24,7 +24,7 @@ int main(int argc, char *argv[]) {
 
     start_t = omp_get_wtime();
 
-    printf("Getting data ... \n");
+    // printf("Getting data ... \n");
 
     // get file identifier first 
     // H5F_ACC_RDONLY -> read only  
@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
 
     H5Sget_simple_extent_dims(space_id, dataset_dims, NULL);
 
-    printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
+    // printf("Dataset dimensions: %lu x %lu\n", dataset_dims[0], dataset_dims[1]);
 
     // read dataset (only the selected number of events)
     int start_row = 0;
@@ -93,7 +93,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    printf("Allocating memory for data ...\n");
+    // printf("Allocating memory for data ...\n");
 
     // allocate memory
     double *data = malloc(n_read * N_COLS * sizeof(double));
@@ -120,7 +120,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    printf("Creating output file ... \n");
+    // printf("Creating output file ... \n");
 
     // output file
     hid_t fout = H5Fcreate(
@@ -136,16 +136,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // array to store elapsed time for each event
-    double *times = malloc(N_EVENTS * sizeof(double));
-    
-    if (times == NULL) {
-        fprintf(stderr, "Failed to allocate times buffer\n");
-        free(data);
-        return EXIT_FAILURE;
-    }
-
-    printf("Starting loop over events ...\n");
+    // printf("Starting loop over events ...\n");
 
     // loop over events
     #pragma omp parallel  
@@ -162,62 +153,8 @@ int main(int argc, char *argv[]) {
     #pragma omp parallel for schedule(runtime) // each event per thread
     for (int ev = 0; ev < N_EVENTS; ++ev) {
 
-        process_single_event(data, ev, times, fout);
+        process_single_event(data, ev, fout);
 
-    }
-
-    // save elapsed times for each run
-    {
-        hsize_t times_dim[1] = { (hsize_t)N_EVENTS };
-        hid_t times_space = H5Screate_simple(
-            1, 
-            times_dim, 
-            NULL);
-        if (times_space < 0) {
-
-            fprintf(stderr, "Cannot create dataspace for times\n");
-
-        } 
-        else {
-            
-            hid_t times_dset = H5Dcreate2(
-                fout, 
-                "/times", 
-                H5T_NATIVE_DOUBLE, 
-                times_space,
-                H5P_DEFAULT, 
-                H5P_DEFAULT, 
-                H5P_DEFAULT
-            );
-
-            if (times_dset < 0) {
-
-                fprintf(stderr, "Cannot create /times dataset\n");
-
-            } 
-            
-            else {
-
-                herr_t werr = H5Dwrite(
-                    times_dset, 
-                    H5T_NATIVE_DOUBLE, 
-                    H5S_ALL, 
-                    H5S_ALL,
-                    H5P_DEFAULT, 
-                    times
-                );
-                
-                if (werr < 0) {
-                    fprintf(stderr, "Cannot write /times dataset\n");
-                }
-                
-                H5Dclose(times_dset);
-
-            }
-
-            H5Sclose(times_space);
-
-        }
     }
     
     // free memory and close file
