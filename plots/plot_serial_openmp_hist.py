@@ -5,11 +5,14 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D  
 
+# total events number
+N_EVENTS = 100000
+
 # event ID to visualize
-EVENT_ID = 3
+EVENT_ID = np.random.randint(N_EVENTS)
 
 # code version
-VERSION = "serial"
+VERSION = "openmp"
 
 # PATHS
 
@@ -39,11 +42,16 @@ def read_raw_particles(event_id=EVENT_ID, raw_file_path=RAW_FILE_PATH, dataset_p
 
     with h5py.File(raw_file_path, "r") as f:
         dset = f[dataset_path]
-        row = dset[event_id]  
+        row = dset[event_id] 
 
-    particles = np.trim_zeros(row)
+    n = 0
 
-    n = particles.shape[0]/n_feat
+    for i in range(row.shape[0]):
+        if row[i*N_FEAT] == 0.0:
+            break
+        n += 1
+
+    particles = row[:n*N_FEAT]
 
     return particles, n
 
@@ -119,6 +127,8 @@ def plot_event(particles, particle_to_cluster, n_part_raw, n_clusters, event_id=
 
     plotted_clusters = set()
 
+    particles = particles.reshape(int(n_part_raw), N_FEAT)
+
     for p_idx in range(particles.shape[0]):
 
         p_t, eta, phi = particles[p_idx, 0], particles[p_idx, 1], particles[p_idx, 2]
@@ -142,12 +152,14 @@ def plot_event(particles, particle_to_cluster, n_part_raw, n_clusters, event_id=
     ax.set_xlabel(r"$\eta$")
     ax.set_ylabel(r"$\phi$")
     ax.set_zlabel(r"$p_T$ (GeV)")
-    ax.set_title(f"Event ID: {event_id} - Particles: {n_part_raw}, Cluster found: {n_clusters}") 
+    ax.set_title(f"Event ID: {event_id} - # Particles: {n_part_raw}, # Clusters found: {n_clusters}") 
 
     plt.tight_layout()
 
     save_path = os.path.join(SAVE_DIR, f"jets_3d_event_{event_id}.png")
     fig.savefig(save_path, dpi=300)
+
+    print('Plot saved.')
 
     plt.show()
 
@@ -158,7 +170,7 @@ def main():
     clusters = read_clusters(CLUSTERS_FILE_PATH, EVENT_ID)
     particle_to_cluster = build_particle_to_cluster_map(clusters)
 
-    print(f"Event ID {EVENT_ID}: {particles.shape[0]} particles, {len(clusters)} jets found")
+    print(f"Event ID {EVENT_ID}: {n_part} particles, {len(clusters)} jets found")
 
     plot_event(particles, particle_to_cluster, n_part, n_clusters=len(clusters))
 

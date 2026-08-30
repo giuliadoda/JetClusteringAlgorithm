@@ -69,7 +69,7 @@ if __name__ == "__main__":
 
         df = default_chunk[default_chunk['schedule']==schedules[i]].sort_index(level='threads')
 
-        y = df['avg_exec_time']
+        y = df['avg_exec_time']/60 # HERE
         y = np.array(t1[i]/y)
 
         ax_su.plot((threads[0], threads[-1]), (y[0], y[0]*threads[-1]), color = 'grey', linestyle = '-.', alpha = 0.6)
@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
         df = max_chunk[max_chunk['schedule']==schedules[i]].sort_index(level='threads')
 
-        y = df['avg_exec_time']
+        y = df['avg_exec_time']/60 # HERE
         y = np.array(t1[i]/y)
 
         ax_su.plot((threads[0], threads[-1]), (y[0], y[0]*threads[-1]), color = 'grey', linestyle = '-.', alpha = 0.6)
