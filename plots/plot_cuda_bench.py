@@ -335,174 +335,240 @@ if __name__ == "__main__":
     # plt.close()
 
 
-    # PLOT IV: FLOPS vs # events and # threads/block
-    #
-    # kernel_ms = average kernel time PER EVENT
-    #
-    # FLOPS = operations_per_event / kernel_time_per_event
-    #
-    # IMPORTANT:
-    #   Replace OPERATIONS_PER_EVENT with the actual number of
-    #   operations performed by the kernel for ONE event.
-    # ------------------------------------------------------------------
+ # ------------------------------------------------------------------
+# PLOT IV: FLOPS vs # events and # threads/block
+#
+# kernel_ms = TOTAL kernel time for all events
+#
+# FLOPS = total_operations / total_kernel_time
+#
+# Error propagation:
+#   sigma_FLOPS / FLOPS = sigma_T / T
+# ------------------------------------------------------------------
 
-    OPERATIONS_PER_EVENT = 1  # TODO: replace with actual number
+# From Nsight Compute, order of magnitude
+OPERATIONS_PER_EVENT = (
+    362452999458        # dadd
+    + 271916939493      # dmul
+    + 2 * 725259954138  # dfma -> 2 FLOP
+) / 100000
 
-    flops_df = (
-        cudabench
-        .groupby(['n_events', 'thr_block'])
-        .agg(
-            avg_kernel_ms=('kernel_ms', 'mean')
-        )
-        .reset_index()
+flops_df = (
+    cudabench
+    .groupby(['n_events', 'thr_block'])
+    .agg(
+        avg_kernel_ms=('kernel_ms', 'mean'),
+        std_kernel_ms=('kernel_ms', 'std')
+    )
+    .reset_index()
+)
+
+# Convert total kernel time: ms -> s
+flops_df['kernel_sec'] = (
+    flops_df['avg_kernel_ms'] / 1000.0
+)
+
+flops_df['std_kernel_sec'] = (
+    flops_df['std_kernel_ms'] / 1000.0
+)
+
+# Total number of operations
+flops_df['total_operations'] = (
+    OPERATIONS_PER_EVENT * flops_df['n_events']
+)
+
+# Achieved FLOPS
+flops_df['flops'] = (
+    flops_df['total_operations']
+    / flops_df['kernel_sec']
+)
+
+# Error propagation:
+# sigma_FLOPS = FLOPS * sigma_T / T
+flops_df['std_flops'] = (
+    flops_df['flops']
+    * flops_df['std_kernel_sec']
+    / flops_df['kernel_sec']
+)
+
+# Convert to GFLOPS
+flops_df['gflops'] = (
+    flops_df['flops'] / 1e9
+)
+
+flops_df['std_gflops'] = (
+    flops_df['std_flops'] / 1e9
+)
+
+
+# ------------------------------------------------------------------
+# FLOPS plot: one line for each n_events
+# ------------------------------------------------------------------
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+ax.grid(alpha=0.4)
+
+events_values = np.sort(
+    flops_df['n_events'].unique()
+)
+
+for i, n in enumerate(events_values):
+
+    df = (
+        flops_df[
+            flops_df['n_events'] == n
+        ]
+        .sort_values('thr_block')
     )
 
-    # Convert ms -> s
-    flops_df['kernel_sec'] = (
-        flops_df['avg_kernel_ms'] / 1000.0
+    ax.errorbar(
+        df['thr_block'],
+        df['gflops'],
+        yerr=df['std_gflops'],
+        color=colors[i % len(colors)],
+        linestyle='--',
+        marker=markers[i % len(markers)],
+        capsize=2.5,
+        label=str(n)
     )
 
-    # FLOPS = operations / seconds
-    flops_df['flops'] = (
-        OPERATIONS_PER_EVENT /
-        flops_df['kernel_sec']
+ax.set_xlabel("# Threads / block")
+ax.set_ylabel("Achieved FP64 performance (GFLOPS)")
+ax.set_title("Achieved FP64 performance vs # Threads / block")
+
+ax.set_xticks(
+    np.sort(
+        flops_df['thr_block'].unique()
+    )
+)
+
+ax.legend(title="# Events")
+
+plt.savefig(
+    FIGURES_DIR + 'flops_thr_block.png',
+    dpi=300,
+    bbox_inches='tight'
+)
+
+plt.close()
+
+
+# ------------------------------------------------------------------
+# PLOT V: Memory bandwidth vs # threads/block
+#
+# kernel_ms = TOTAL kernel time for all events
+#
+# Bandwidth = total_bytes / total_kernel_time
+#
+# Error propagation:
+#   sigma_BW / BW = sigma_T / T
+# ------------------------------------------------------------------
+
+# From Nsight Compute, order of magnitude
+BYTES_PER_EVENT = (
+    1.34e9       # DRAM read
+    + 220.24e6   # DRAM write
+) / 100000
+
+bandwidth_df = (
+    cudabench
+    .groupby(['n_events', 'thr_block'])
+    .agg(
+        avg_kernel_ms=('kernel_ms', 'mean'),
+        std_kernel_ms=('kernel_ms', 'std')
+    )
+    .reset_index()
+)
+
+# Convert total kernel time: ms -> s
+bandwidth_df['kernel_sec'] = (
+    bandwidth_df['avg_kernel_ms'] / 1000.0
+)
+
+bandwidth_df['std_kernel_sec'] = (
+    bandwidth_df['std_kernel_ms'] / 1000.0
+)
+
+# Total bytes transferred
+bandwidth_df['total_bytes'] = (
+    BYTES_PER_EVENT * bandwidth_df['n_events']
+)
+
+# Achieved bandwidth
+bandwidth_df['bandwidth_Bps'] = (
+    bandwidth_df['total_bytes']
+    / bandwidth_df['kernel_sec']
+)
+
+# Error propagation:
+# sigma_BW = BW * sigma_T / T
+bandwidth_df['std_bandwidth_Bps'] = (
+    bandwidth_df['bandwidth_Bps']
+    * bandwidth_df['std_kernel_sec']
+    / bandwidth_df['kernel_sec']
+)
+
+# Convert B/s -> GB/s
+bandwidth_df['bandwidth_GBs'] = (
+    bandwidth_df['bandwidth_Bps'] / 1e9
+)
+
+bandwidth_df['std_bandwidth_GBs'] = (
+    bandwidth_df['std_bandwidth_Bps'] / 1e9
+)
+
+
+# ------------------------------------------------------------------
+# Bandwidth plot: one line for each n_events
+# ------------------------------------------------------------------
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+ax.grid(alpha=0.4)
+
+events_values = np.sort(
+    bandwidth_df['n_events'].unique()
+)
+
+for i, n in enumerate(events_values):
+
+    df = (
+        bandwidth_df[
+            bandwidth_df['n_events'] == n
+        ]
+        .sort_values('thr_block')
     )
 
-    # Pivot for heatmap
-    flops_heatmap = (
-        flops_df
-        .pivot(
-            index='n_events',
-            columns='thr_block',
-            values='flops'
-        )
-        .sort_index(axis=0)
-        .sort_index(axis=1)
+    ax.errorbar(
+        df['thr_block'],
+        df['bandwidth_GBs'],
+        yerr=df['std_bandwidth_GBs'],
+        color=colors[i % len(colors)],
+        linestyle='--',
+        marker=markers[i % len(markers)],
+        capsize=2.5,
+        label=str(n)
     )
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+ax.set_xlabel("# Threads / block")
+ax.set_ylabel("Estimated DRAM bandwidth (GB/s)")
+ax.set_title(
+    "Estimated kernel memory bandwidth vs # Threads / block"
+)
 
-    im = ax.imshow(
-        flops_heatmap.values,
-        aspect='auto',
-        cmap='seismic',
-        norm='log',
-        alpha=0.85
+ax.set_xticks(
+    np.sort(
+        bandwidth_df['thr_block'].unique()
     )
+)
 
-    ax.set_xticks(
-        range(len(flops_heatmap.columns)),
-        labels=flops_heatmap.columns
-    )
+ax.legend(title="# Events")
 
-    ax.set_yticks(
-        range(len(flops_heatmap.index)),
-        labels=flops_heatmap.index
-    )
+plt.savefig(
+    FIGURES_DIR + 'bandwidth_thr_block.png',
+    dpi=300,
+    bbox_inches='tight'
+)
 
-    ax.set_xlabel("# Threads / block")
-    ax.set_ylabel("# Events")
-    ax.set_title("FLOPS")
-
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label("FLOPS")
-
-    plt.savefig(
-        FIGURES_DIR + 'flops_heatmap.png',
-        dpi=300,
-        bbox_inches='tight'
-    )
-
-    plt.close()
-
-
-    # ------------------------------------------------------------------
-    # PLOT V: Memory bandwidth vs # threads/block
-    #
-    # kernel_ms = average kernel time PER EVENT
-    #
-    # Bandwidth = bytes_per_event / kernel_time_per_event
-    #
-    # IMPORTANT:
-    #   Replace BYTES_PER_EVENT with the actual number of bytes
-    #   read/written by the kernel for ONE event.
-    # ------------------------------------------------------------------
-
-    BYTES_PER_EVENT = 1  # TODO: replace with actual number
-
-    bandwidth_df = (
-        cudabench
-        .groupby(['n_events', 'thr_block'])
-        .agg(
-            avg_kernel_ms=('kernel_ms', 'mean')
-        )
-        .reset_index()
-    )
-
-    # Convert ms -> s
-    bandwidth_df['kernel_sec'] = (
-        bandwidth_df['avg_kernel_ms'] / 1000.0
-    )
-
-    # Bandwidth = bytes / seconds
-    bandwidth_df['bandwidth_Bps'] = (
-        BYTES_PER_EVENT /
-        bandwidth_df['kernel_sec']
-    )
-
-    # Convert B/s -> GB/s
-    bandwidth_df['bandwidth_GBs'] = (
-        bandwidth_df['bandwidth_Bps'] / 1e9
-    )
-
-
-    # ------------------------------------------------------------------
-    # Plot bandwidth vs # threads/block
-    # One line for each n_events
-    # ------------------------------------------------------------------
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-
-    ax.grid(alpha=0.4)
-
-    events_values = np.sort(
-        bandwidth_df['n_events'].unique()
-    )
-
-    for i, n in enumerate(events_values):
-
-        df = (
-            bandwidth_df[
-                bandwidth_df['n_events'] == n
-            ]
-            .sort_values('thr_block')
-        )
-
-        ax.plot(
-            df['thr_block'],
-            df['bandwidth_GBs'],
-            color=colors[i % len(colors)],
-            linestyle='--',
-            marker=markers[i % len(markers)],
-            label=str(n)
-        )
-
-    ax.set_xlabel("# Threads / block")
-    ax.set_ylabel("Bandwidth (GB/s)")
-    ax.set_title("Kernel memory bandwidth vs # Threads / block")
-
-    ax.set_xticks(
-        np.sort(
-            bandwidth_df['thr_block'].unique()
-        )
-    )
-
-    ax.legend(title="# Events")
-
-    plt.savefig(
-        FIGURES_DIR + 'bandwidth_thr_block.png',
-        dpi=300,
-        bbox_inches='tight'
-    )
-
-    plt.close()
+plt.close()
