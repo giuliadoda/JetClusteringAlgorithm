@@ -79,7 +79,7 @@ for sched_entry in "${SCHEDULES[@]}"; do
                 continue
             fi
 
-            echo "${sched_name},${chunk_label},${threads},${run},${time_sec},${h5_out}" >> "$OUTPUT_CSV"
+            echo "${sched_name},${chunk_label},${threads},${run},${time_sec}" >> "$OUTPUT_CSV"
 
         done
     done
