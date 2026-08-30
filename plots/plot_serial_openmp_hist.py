@@ -29,41 +29,33 @@ MAX_P = 700
 BAR_WIDTH_ETA = 0.1
 BAR_WIDTH_PHI = 0.1
 
-# heatmap settings
-HEATMAP_BINS_ETA = 100
-HEATMAP_BINS_PHI = 100
-ETA_RANGE = (-8.0, 8.0)    # should be automatic
-PHI_RANGE = (-np.pi, np.pi)  
-
 # plot directory
-SAVE_DIR = f"/mnt/POD/MCP_GD/JetClusteringAlgorithm/plots/figures/{VERSION}" # make sure it exists
+SAVE_DIR = f"/mnt/POD/MCP_GD/JetClusteringAlgorithm/plots/figures/{VERSION}" 
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # read event from raw data
-def read_raw_particles(raw_file_path, dataset_path, event_id, max_p, n_feat):
-
-    n_cols = max_p * n_feat
+# returns event row and number of particles
+def read_raw_particles(event_id=EVENT_ID, raw_file_path=RAW_FILE_PATH, dataset_path=RAW_DATASET_PATH, n_feat=N_FEAT):
 
     with h5py.File(raw_file_path, "r") as f:
         dset = f[dataset_path]
-        row = dset[event_id, :]  
+        row = dset[event_id]  
 
-    row = np.asarray(row, dtype=np.float64)
+    particles = np.trim_zeros(row)
 
-    label = row[-1]
-    row = row[:n_cols]
-    row = row.reshape(max_p, n_feat)
+    n = particles.shape[0]/n_feat
 
-    # change here when the c code will save also this **
-    n_part = 0
-    while n_part < max_p and row[n_part, 0] != 0.0:
-        n_part += 1
+    return particles, n
 
-    particles = row[:n_part, :] 
-    return particles
-
-# read clustering results --> change also here after updating the c code **
-def read_clusters(clusters_file_path, event_id):
+# read clustering results 
+# result file structure:
+# event i group
+#   --> cluster i group
+#       --> cluster ID
+#       --> cluster components (particle IDs)    
+#       --> cluster kinematics
+# returns a list of clusters (sorted by ID)
+def read_clusters(clusters_file_path=CLUSTERS_FILE_PATH, event_id=EVENT_ID):
 
     clusters = []
     event_name = f"/event_{event_id}"
@@ -102,15 +94,23 @@ def read_clusters(clusters_file_path, event_id):
     return clusters
 
 # map each particle ID to the corresponding Jet
+# take the list of clusters with clusters info
+# returns a dict like particle ID : cluster ID
 def build_particle_to_cluster_map(clusters):
+
     mapping = {}
+
     for cluster in clusters:
+
         for particle_idx in cluster["components"]:
+
             mapping[int(particle_idx)] = cluster["cluster_id"]
+
     return mapping
 
 # plot 2D histogram
-def plot_event(particles, particle_to_cluster, event_id, n_clusters, isLegend=False):
+# take raw data (particles), mapping (particle_to_cluster) and #clusters
+def plot_event(particles, particle_to_cluster, n_part_raw, n_clusters, event_id=EVENT_ID):
 
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
@@ -125,9 +125,6 @@ def plot_event(particles, particle_to_cluster, event_id, n_clusters, isLegend=Fa
 
         cluster_id = particle_to_cluster.get(p_idx, -1)
         color = cmap(cluster_id % cmap.N) if cluster_id >= 0 else "gray"
-
-        if isLegend:
-            label = f"Jet {cluster_id}" if cluster_id not in plotted_clusters and cluster_id >= 0 else None
 
         plotted_clusters.add(cluster_id)
 
@@ -145,68 +142,25 @@ def plot_event(particles, particle_to_cluster, event_id, n_clusters, isLegend=Fa
     ax.set_xlabel(r"$\eta$")
     ax.set_ylabel(r"$\phi$")
     ax.set_zlabel(r"$p_T$ (GeV)")
-    ax.set_title(f"Event ID: {event_id}") # add how many cluster founds, how many initial particles
-
-    if isLegend:
-        handles, labels = ax.get_legend_handles_labels()
-        if handles:
-            by_label = dict(zip(labels, handles))
-            ax.legend(by_label.values(), by_label.keys(), loc="upper left", fontsize=8)
+    ax.set_title(f"Event ID: {event_id} - Particles: {n_part_raw}, Cluster found: {n_clusters}") 
 
     plt.tight_layout()
 
     save_path = os.path.join(SAVE_DIR, f"jets_3d_event_{event_id}.png")
-    fig.savefig(save_path, dpi=200)
+    fig.savefig(save_path, dpi=300)
 
     plt.show()
-
-# plot heatmap
-def plot_event_heatmap(particles, particle_to_cluster, event_id, n_clusters):
-
-    eta = particles[:, 1]
-    phi = particles[:, 2]
-    p_t = particles[:, 0]
-
-    # for each bin sum momenta of particles inside the bin
-    heat, eta_edges, phi_edges = np.histogram2d(
-        eta, phi,
-        bins=[HEATMAP_BINS_ETA, HEATMAP_BINS_PHI],
-        range=[ETA_RANGE, PHI_RANGE],
-        weights=p_t,
-    )
-
-    fig, ax = plt.subplots(figsize=(9, 7))
-
-    mesh = ax.pcolormesh(
-        eta_edges, phi_edges, heat.T,
-        cmap="plasma",
-        shading="auto",
-    )
-    cbar = fig.colorbar(mesh, ax=ax)
-    cbar.set_label(r"$p_T$ (GeV)")
-
-    ax.set_xlabel(r"$\eta$")
-    ax.set_ylabel(r"$\phi$")
-    ax.set_title(f"Event ID {event_id}")
-
-    plt.tight_layout()
-
-    save_path = os.path.join(SAVE_DIR, f"jets_heatmap_event_{event_id}.png")
-    fig.savefig(save_path, dpi=200)
-
-    plt.show()
-
 
 def main():
 
-    particles = read_raw_particles(RAW_FILE_PATH, RAW_DATASET_PATH, EVENT_ID, MAX_P, N_FEAT)
+    particles, n_part = read_raw_particles()
+
     clusters = read_clusters(CLUSTERS_FILE_PATH, EVENT_ID)
     particle_to_cluster = build_particle_to_cluster_map(clusters)
 
     print(f"Event ID {EVENT_ID}: {particles.shape[0]} particles, {len(clusters)} jets found")
 
-    plot_event(particles, particle_to_cluster, EVENT_ID, n_clusters=len(clusters))
-    plot_event_heatmap(particles, particle_to_cluster, EVENT_ID, n_clusters=len(clusters))
+    plot_event(particles, particle_to_cluster, n_part, n_clusters=len(clusters))
 
 
 if __name__ == "__main__":

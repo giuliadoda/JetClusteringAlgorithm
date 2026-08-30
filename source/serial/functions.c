@@ -124,7 +124,7 @@ static void particle_update(Event *ev, int i, int j) {
     double eta_new = (p_t_i*eta_i + p_t_j*eta_j)/p_t_new;
     double phi_new = (p_t_i*phi_i + p_t_j*phi_j)/p_t_new;
 
-    // recall that phi is periodic --> CHECK HERE MAYBE
+    // recall that phi is periodic 
     if (phi_new > M_PI)
     {
         phi_new = fabs(phi_new-2.*M_PI);
@@ -363,8 +363,6 @@ static herr_t save_event(hid_t fout, Event *event) {
         }
         
     }
-
-    // printf("Number of clusters: %d\n", cluster_counter); // save it and save also number of particles in the event (?)
     
     event_status |= H5Gclose(event_group);
 
