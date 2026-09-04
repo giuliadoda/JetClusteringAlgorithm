@@ -11,15 +11,16 @@ set -euo pipefail
 
 BINARY="${1:-./bin/openmp_version}"
 RUNS="${2:-1}"                     
-OUTPUT_CSV="/mnt/POD/MCP_GD/JetClusteringAlgorithm/benchmarks/benchmark_results_openmp_schedules_threads.csv"
+# OUTPUT_CSV="/mnt/POD/MCP_GD/JetClusteringAlgorithm/benchmarks/benchmark_results_openmp_schedules_threads.csv"
+OUTPUT_CSV="/mnt/POD/MCP_GD/JetClusteringAlgorithm/benchmarks/bench_results_openmp_no_static.csv"
 
 # schedules to test: "name,chunk" (chunk empty = let OpenMP decide default chunk)
 SCHEDULES=(
-    "static,"
-    "static,1"
-    "static,10"
-    "static,100"
-    "static,1000"
+    # "static,"
+    # "static,1"
+    # "static,10"
+    # "static,100"
+    # "static,1000"
     "dynamic,"
     "dynamic,10"
     "dynamic,100"

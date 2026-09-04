@@ -225,17 +225,17 @@ __global__ void processEvent(
             }
 
             // wait for all the threads to write before next reduction step
-            __syncthreads(); // could be optimised because when we have only one warp active, by definition threads within a warp are synchronised but *
+            // __syncthreads(); // could be optimised because when we have only one warp active, by definition threads within a warp are synchronised but *
 
             // alternative
-            // if (k > 32) // more than 1 warp active
-            // {
-            //      __syncthreads();
-            // } 
-            // else // only 1 warp active
-            // {
-            //     __syncwarp(); // * we still nead some syncing because of the if and since T4 has independent thread scheduling (each thread has its own program counter and stack, can help efficiency in divergences)
-            // }
+            if (k > 32) // more than 1 warp active
+            {
+                 __syncthreads();
+            } 
+            else // only 1 warp active
+            {
+                __syncwarp(); // * we still nead some syncing because of the if and since T4 has independent thread scheduling (each thread has its own program counter and stack, can help efficiency in divergences)
+            }
             
         } // end of reduction loop
         

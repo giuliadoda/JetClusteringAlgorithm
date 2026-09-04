@@ -20,8 +20,8 @@ PROJECT_ROOT="/mnt/POD/MCP_GD/JetClusteringAlgorithm"
 
 BIN_PATH="${PROJECT_ROOT}/bin/cuda_version"
 
-RAW_CSV="${PROJECT_ROOT}/benchmarks/results_cuda_raw.csv"
-SUMMARY_CSV="${PROJECT_ROOT}/benchmarks/results_cuda_summary.csv"
+RAW_CSV="${PROJECT_ROOT}/benchmarks/results_cuda_raw_2.csv"
+SUMMARY_CSV="${PROJECT_ROOT}/benchmarks/results_cuda_summary_2.csv"
 
 
 # setup
