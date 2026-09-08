@@ -3,10 +3,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 ROOT_DIR = '/mnt/POD/MCP_GD/JetClusteringAlgorithm/'
-FIGURES_DIR = ROOT_DIR + 'plots/figures/benchmarks/cuda/'
+FIGURES_DIR = ROOT_DIR + 'plots/figures/benchmarks/cuda/second_run/'
 BENCH_DIR = ROOT_DIR + 'benchmarks/'
 
-TIMING_FILE = BENCH_DIR + 'results_cuda_raw.csv'
+TIMING_FILE = BENCH_DIR + 'results_cuda_raw_2.csv'
 
 
 colors = [  "#58508d", # violet
